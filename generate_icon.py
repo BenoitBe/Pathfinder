@@ -123,4 +123,4 @@ for size in (512,256,200,128):
     pil.resize((int(size*W/H), size), Image.LANCZOS).save(f"assets/pathfinder_icon_{size}.png")
 pil.resize((205,246), Image.LANCZOS).save("assets/pathfinder_icon.ico",
                                           sizes=[(64,77),(128,154),(205,246)])
-print("Icône rover générée.")
+print("Rover icon generated -> assets/")

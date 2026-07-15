@@ -1,7 +1,6 @@
 """
-Cache disque pour les appels online (axe A — publications).
-Clé = sha1(accessions triées) + taxid + endpoint. Stocke la valeur + date de fetch.
-Prêt pour l'étape 2 ; non sollicité par le cœur offline.
+Disk cache for online calls (Publications axis).
+Key = sha1(sorted accessions) + taxid + endpoint. Stores the value + fetch date.
 """
 from __future__ import annotations
 import hashlib

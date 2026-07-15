@@ -150,13 +150,13 @@ pathfinder/
 ```
 pathfinder_output/
 ├── pathfinder_report.html      # Self-contained interactive report
-├── pathfinder_synthese.xlsx    # Multi-sheet synthesis workbook
-└── pathfinder_resume.md        # Interpretive summary (standalone)
+├── pathfinder_synthesis.xlsx   # Multi-sheet synthesis workbook
+└── pathfinder_summary.md       # Interpretive summary (standalone)
 ```
 
 **HTML tabs**: Summary · Overview · Meta-GO · Exploration · Protein UMAP · Publications
 
-**Excel sheets**: provenance · resume · MetaGO_matrix · MetaGO_directionality ·
+**Excel sheets**: provenance · Summary · MetaGO_matrix · MetaGO_directionality ·
 PCA_scores · PCA_loadings · PC_factor_assoc · PC_factor_multi · Sample_correlation ·
 PCA_scree · Publications
 
@@ -166,7 +166,7 @@ PCA_scree · Publications
 
 ```
 cd example_data && python make_synthetic.py
-python ../pathfinder.py --stats rapportstatistique.xlsx --go rapportenrichissementGO.xlsx
+python ../pathfinder.py --design ExperimentalDesign.csv
 ```
 
 ---

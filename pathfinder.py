@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-Pathfinder — couche d'exploration & de synthèse au-dessus des sorties Deimos.
+Pathfinder - exploration & synthesis layer on top of Deimos/Phobos outputs.
 
-Étape 1 (offline, déterministe) :
-  - Axe B : méta-comparaison GO (matrice terme × contraste, directionnalité, redondance)
-  - Axe C : exploration (PCA enrichie, association PC↔facteur, corrélation, UMAP gardé)
-  - Sorties : pathfinder_synthese.xlsx + pathfinder_report.html
+Reads the upstream Excel report (no statistics are recomputed) and produces:
+  - Meta-GO      : term x contrast matrix, cross-directionality, redundancy grouping
+  - Exploration  : PCA, PC <-> factor association (multi-factor), correlation, UMAP
+  - Publications : STRING PMID enrichment per contrast (online, opt-in)
+  - Summary      : deterministic interpretive summary
 
-Axe A (publications, online + cache) : branché à l'étape 2 via species.py / cache.py.
+Outputs: pathfinder_report.html + pathfinder_synthesis.xlsx + pathfinder_summary.md
 
-Usage :
-  python pathfinder.py --stats rapportstatistique.xlsx [--go rapportenrichissementGO.xlsx]
-                       [--outdir .] [--pthr 0.05] [--jaccard 0.5] [--no-umap]
-                       [--org rnorvegicus]   # transmis par Deimos, réservé axe A
+Usage:
+  python pathfinder.py [--stats FILE] [--go FILE] [--design FILE] [--outdir DIR]
+                       [--pthr P] [--jaccard D] [--no-umap] [--diagnose]
+                       [--online --org hsapiens [--refresh]]
 """
 from __future__ import annotations
 import argparse
@@ -35,27 +36,27 @@ import build_report_xlsx as build_xlsx
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="pathfinder")
     ap.add_argument("--stats", default=None,
-                    help="rapportstatistique.xlsx (auto-détecté dans --outdir si absent)")
-    ap.add_argument("--go", default=None, help="rapportenrichissementGO.xlsx (optionnel)")
+                    help="statistics workbook (auto-detected by content if omitted)")
+    ap.add_argument("--go", default=None, help="GO enrichment workbook (optional; may be the same file)")
     ap.add_argument("--outdir", default=".")
-    ap.add_argument("--pthr", type=float, default=0.05, help="seuil p pour masquer la matrice GO")
-    ap.add_argument("--jaccard", type=float, default=0.5, help="distance de coupe redondance GO")
+    ap.add_argument("--pthr", type=float, default=0.05, help="p threshold masking the GO matrix")
+    ap.add_argument("--jaccard", type=float, default=0.5, help="cut distance for GO redundancy grouping")
     ap.add_argument("--no-umap", action="store_true")
     ap.add_argument("--design", default=None,
-                    help="ExperimentalDesign (CSV/xlsx) mappant échantillon→condition")
-    ap.add_argument("--org", default=None, help="org gprofiler (hsapiens…) ou taxid — requis pour --online")
+                    help="ExperimentalDesign (CSV/xlsx) mapping sample -> condition (+ extra factors)")
+    ap.add_argument("--org", default=None, help="gProfiler organism (hsapiens...) or NCBI taxid - required for --online")
     ap.add_argument("--online", action="store_true",
-                    help="active l'axe A (publications STRING PMID) — nécessite un réseau et --org")
-    ap.add_argument("--refresh", action="store_true", help="ignore le cache et refait les appels online")
+                    help="enable the Publications axis (STRING PMID) - needs network access and --org")
+    ap.add_argument("--refresh", action="store_true", help="bypass the cache and re-issue online calls")
     ap.add_argument("--write-design-template", action="store_true",
-                    help="écrit un ExperimentalDesign_template.csv pré-rempli avec les colonnes détectées, puis quitte")
+                    help="write a pre-filled ExperimentalDesign_template.csv, then exit")
     ap.add_argument("--diagnose", action="store_true",
-                    help="affiche les colonnes/conditions détectées puis quitte")
+                    help="report detected sheets/columns and group sizes, then exit")
     args = ap.parse_args(argv)
 
     os.makedirs(args.outdir, exist_ok=True)
 
-    # auto-détection par CONTENU (indépendante du nom de fichier)
+    # CONTENT-based auto-detection (independent of filenames)
     import glob as _glob
 
     def _list_xlsx():
@@ -69,8 +70,8 @@ def main(argv=None):
             rp = os.path.realpath(p)
             if rp not in seen:
                 seen.add(rp); out.append(p)
-        # exclure nos propres sorties
-        return [p for p in out if "pathfinder_synthese" not in os.path.basename(p).lower()]
+        # exclude our own outputs
+        return [p for p in out if not os.path.basename(p).lower().startswith("pathfinder_")]
 
     def _peek(path):
         try:
@@ -97,25 +98,25 @@ def main(argv=None):
         for p, (is_stats, _) in candidates:
             if is_stats:
                 args.stats = p
-                print(f"[Pathfinder] stats auto-détecté (par contenu) : {p}")
+                print(f"[Pathfinder] statistics auto-detected (by content): {p}")
                 break
         if not args.stats:
-            ap.error("aucun classeur avec colonnes '<C>_p.val' trouvé — précise --stats <fichier.xlsx>")
+            ap.error("no workbook with '<C>_p.val' columns found - specify --stats <file.xlsx>")
     if not args.go:
         for p, (_, is_go) in (candidates or []):
             if is_go:
                 args.go = p
-                print(f"[Pathfinder] GO auto-détecté (par contenu) : {p}")
+                print(f"[Pathfinder] GO auto-detected (by content): {p}")
                 break
-        # GO possiblement dans le même classeur que les stats
+        # GO may live in the same workbook as the statistics
         if not args.go and args.stats and _peek(args.stats)[1]:
             args.go = args.stats
-            print("[Pathfinder] GO détecté dans le classeur stats.")
+            print("[Pathfinder] GO found inside the statistics workbook.")
 
-    provenance = {"outil": "Pathfinder v1 (offline core)",
+    provenance = {"tool": "Pathfinder v1",
                   "date": time.strftime("%Y-%m-%d %H:%M:%S")}
 
-    # ---- Design expérimental (échantillon→condition) ----
+    # ---- Experimental design (sample -> condition) ----
     design_map, design_src, design_frame = None, None, None
     if args.design and os.path.exists(args.design):
         design_map, design_src = io_layer.load_design(args.design), args.design
@@ -133,12 +134,12 @@ def main(argv=None):
         if dcsv:
             design_map, design_src = io_layer.load_design(dcsv), dcsv
             design_frame = io_layer.load_design_frame(dcsv)
-        else:                                   # design dans une sheet du classeur ?
+        else:                                   # design inside a sheet of the workbook?
             try:
                 for nm, df in pd.read_excel(args.stats, sheet_name=None).items():
                     cols = [str(c).lower() for c in df.columns]
                     by_name = any(k in str(nm).lower() for k in ("design", "metadata", "experiment", "samples"))
-                    # par contenu : une colonne 'condition/group…' + peu de lignes (≈ n échantillons)
+                    # by content: a 'condition/group...' column + few rows (~ n samples)
                     by_content = (any(any(k in c for k in ("condition", "group", "groupe", "class", "treatment"))
                                       for c in cols) and 1 <= len(df) <= 500 and df.shape[1] <= 12)
                     if by_name or by_content:
@@ -148,37 +149,37 @@ def main(argv=None):
             except Exception:
                 pass
     if design_src:
-        print(f"[Pathfinder] design détecté : {design_src}")
+        print(f"[Pathfinder] design detected: {design_src}")
 
-    # ---- Chargement ----
+    # ---- Loading ----
     stats = io_layer.load_stats(args.stats, design_map=design_map)
     if not stats.conditions_resolved:
-        print("[Pathfinder] ⚠ conditions NON résolues : les colonnes échantillon "
-              f"({', '.join(map(str, stats.sample_int_cols[:4]))}…) ne codent pas la condition et "
-              "aucun design n'a été trouvé. Fournis --design ExperimentalDesign.csv "
-              "(colonnes échantillon + condition) pour colorer la PCA et tester PC↔condition.")
+        print("[Pathfinder] ⚠ conditions NOT resolved: the sample columns "
+              f"({', '.join(map(str, stats.sample_int_cols[:4]))}...) do not encode the condition "
+              "and no design was found. Provide --design ExperimentalDesign.csv "
+              "(sample + condition columns) to colour the PCA and test PC <-> condition.")
 
     if args.write_design_template:
         tpl = os.path.join(args.outdir, "ExperimentalDesign_template.csv")
         pd.DataFrame({"sample": stats.sample_int_cols,
-                      "condition": ["A_REMPLIR"] * len(stats.sample_int_cols)}).to_csv(tpl, index=False)
-        print(f"[Pathfinder] template écrit : {tpl}\n"
-              f"  → remplis la colonne 'condition' ({len(stats.sample_int_cols)} lignes), puis :\n"
+                      "condition": ["TO_FILL"] * len(stats.sample_int_cols)}).to_csv(tpl, index=False)
+        print(f"[Pathfinder] template written: {tpl}\n"
+              f"  -> fill in the 'condition' column ({len(stats.sample_int_cols)} rows), then run:\n"
               f"     python pathfinder.py --design {os.path.basename(tpl)}")
         return None
 
     if args.diagnose:
         from collections import Counter
-        print("\n=== DIAGNOSTIC Pathfinder ===")
-        print(f"Fichier stats : {args.stats}\n")
-        # structure de TOUT le classeur
+        print("\n=== Pathfinder DIAGNOSTIC ===")
+        print(f"Statistics file: {args.stats}\n")
+        # structure of the WHOLE workbook
         allsheets = pd.read_excel(args.stats, sheet_name=None)
-        print("Sheets du classeur :")
+        print("Workbook sheets:")
         for name, df in allsheets.items():
             num = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
             has_pval = any(str(c).endswith("_p.val") for c in df.columns)
             has_term = "term_name" in [str(c) for c in df.columns]
-            # colonnes numériques hors motifs stats connus (candidates échantillons)
+            # numeric columns outside known stats patterns (sample candidates)
             statish = [c for c in df.columns if any(str(c).endswith(s) for s in ("_diff","_p.val","_p.adj"))
                        or str(c).startswith(("Robustness_Score_","Pi_Score_"))]
             sample_like = [c for c in num if c not in statish and str(c) not in io_layer._META]
@@ -186,98 +187,98 @@ def main(argv=None):
             if has_pval: flags.append("STATS(_p.val)")
             if has_term: flags.append("GO(term_name)")
             print(f"  · {name:<28} lignes={len(df):>5}  cols={len(df.columns):>4}  "
-                  f"numeriques={len(num):>4}  candidates_echantillon={len(sample_like):>4}  {' '.join(flags)}")
+                  f"numeric={len(num):>4}  sample_candidates={len(sample_like):>4}  {' '.join(flags)}")
             if sample_like:
                 ex = ', '.join(str(c) for c in sample_like[:8])
-                print(f"      ex. colonnes échantillon : {ex}{' …' if len(sample_like)>8 else ''}")
+                print(f"      e.g. sample columns: {ex}{' ...' if len(sample_like)>8 else ''}")
         print()
-        # ce que le loader a effectivement retenu
+        # what the loader actually kept
         sizes = Counter(stats.cond_map[c] for c in stats.sample_int_cols)
-        print(f"[Loader] sheet comparaison retenue : {len(stats.comp)} lignes")
-        print(f"[Loader] MATRICE PCA : sheet '{stats.pca_source}' → {len(stats.sample_int_cols)} colonnes échantillon")
+        print(f"[Loader] comparison sheet selected: {len(stats.comp)} rows")
+        print(f"[Loader] PCA MATRIX: sheet '{stats.pca_source}' -> {len(stats.sample_int_cols)} sample columns")
         if stats.sample_int_cols:
-            print("         ex. : " + ", ".join(str(c) for c in stats.sample_int_cols[:10]))
-        print(f"[Loader] Z-score : {'présente' if stats.zscore is not None else 'absente'}")
-        print(f"[Loader] contrastes ({len(stats.contrasts)}) : {', '.join(stats.contrasts[:6])}"
-              f"{' …' if len(stats.contrasts)>6 else ''}")
-        print(f"[Loader] colonnes intensité PCA retenues : {len(stats.sample_int_cols)}")
-        print(f"[Loader] conditions ({len(sizes)}) tailles : "
+            print("         e.g.: " + ", ".join(str(c) for c in stats.sample_int_cols[:10]))
+        print(f"[Loader] Z-score sheet: {'present' if stats.zscore is not None else 'absent'}")
+        print(f"[Loader] contrasts ({len(stats.contrasts)}): {', '.join(stats.contrasts[:6])}"
+              f"{' ...' if len(stats.contrasts)>6 else ''}")
+        print(f"[Loader] PCA intensity columns kept: {len(stats.sample_int_cols)}")
+        print(f"[Loader] conditions ({len(sizes)}) group sizes: "
               + ", ".join(f"{c}={n}" for c, n in sizes.items()))
         from collections import Counter
         sizes = Counter(stats.cond_map[c] for c in stats.sample_int_cols)
-        print(f"[Loader] design : {design_src or 'non fourni'} → conditions "
-              f"{'RÉSOLUES' if stats.conditions_resolved else 'NON résolues'}")
-        print(f"[Loader] conditions ({len(sizes)}) tailles : "
+        print(f"[Loader] design: {design_src or 'not provided'} -> conditions "
+              f"{'RESOLVED' if stats.conditions_resolved else 'NOT resolved'}")
+        print(f"[Loader] conditions ({len(sizes)}) group sizes: "
               + ", ".join(f"{c}={n}" for c, n in list(sizes.items())[:12]))
         print("=============================\n")
         return None
 
-    provenance["fichier_stats"] = os.path.basename(args.stats)
-    provenance["contrastes"] = ", ".join(stats.contrasts)
+    provenance["stats_file"] = os.path.basename(args.stats)
+    provenance["contrasts"] = ", ".join(stats.contrasts)
     provenance["conditions"] = ", ".join(stats.conditions)
-    provenance["design"] = design_src or "non fourni"
-    provenance["conditions_resolues"] = "oui" if stats.conditions_resolved else "NON — fournir --design"
-    provenance["n_echantillons"] = len(stats.sample_int_cols)
-    provenance["n_proteines"] = len(stats.comp)
+    provenance["design"] = design_src or "not provided"
+    provenance["conditions_resolved"] = "yes" if stats.conditions_resolved else "NO - provide --design"
+    provenance["n_samples"] = len(stats.sample_int_cols)
+    provenance["n_proteins"] = len(stats.comp)
 
     go_res = None
     if args.go and os.path.exists(args.go):
         go = io_layer.load_go(args.go, stats.contrasts)
-        provenance["fichier_go"] = os.path.basename(args.go)
-        provenance["n_lignes_go"] = len(go.long)
+        provenance["go_file"] = os.path.basename(args.go)
+        provenance["go_rows"] = len(go.long)
         go_res = axis_meta_go.run(go.long, p_thr=args.pthr, jaccard_cut=args.jaccard)
     else:
-        # matrice vide -> onglet Méta-GO informatif
+        # empty matrix -> informative Meta-GO tab
         empty = pd.DataFrame(columns=["term_name", "term_id", "source", "n_sig",
                                       "redundancy_cluster", "is_representative"])
         go_res = {"matrix": pd.DataFrame(), "meta": empty,
                   "directionality": pd.DataFrame(), "term_genes": {}}
-        provenance["fichier_go"] = "absent — axe méta-GO ignoré"
+        provenance["go_file"] = "absent - Meta-GO axis skipped"
 
-    # ---- Axe C ----
-    # facteurs du design (multi-facteurs : condition, batch, ordre d'injection…)
+    # ---- Exploration axis ----
+    # design factors (multi-factor: condition, batch, injection order...)
     factors_df = None
     if design_frame is not None:
         try:
             factors_df = io_layer.map_design_factors(stats.sample_int_cols, design_frame[0], design_frame[1])
             if factors_df is not None:
-                print(f"[Pathfinder] facteurs du design testés : {', '.join(map(str, factors_df.columns))}")
+                print(f"[Pathfinder] design factors tested: {', '.join(map(str, factors_df.columns))}")
         except Exception as e:
-            print(f"[Pathfinder] ⚠ facteurs du design non exploitables ({type(e).__name__})")
+            print(f"[Pathfinder] ⚠ design factors unusable ({type(e).__name__})")
 
     explore = axis_explore.run(stats, do_umap=not args.no_umap, factors_df=factors_df)
 
-    # ---- Espèce (taxid) + Axe A publications (online, opt-in) ----
+    # ---- Species (taxid) + Publications axis (online, opt-in) ----
     taxid, org, src = species_mod.resolve_species(org_arg=args.org)
-    provenance["espece_taxid"] = f"{taxid} ({src})" if taxid else src
+    provenance["species_taxid"] = f"{taxid} ({src})" if taxid else src
 
     pubs = None
     if args.online:
         if not taxid:
-            print("[Pathfinder] ⚠ --online demandé mais taxid inconnu : précise --org "
-                  "(hsapiens, mmusculus, rnorvegicus… ou un taxid numérique).")
+            print("[Pathfinder] ⚠ --online requested but taxid unknown: specify --org "
+                  "(hsapiens, mmusculus, rnorvegicus... or a numeric taxid).")
         else:
-            print(f"[Pathfinder] axe A (publications) : requêtes STRING PMID (taxid {taxid})…")
+            print(f"[Pathfinder] Publications axis: querying STRING PMID (taxid {taxid})...")
             pubs = axis_publications.run(stats, taxid, p_thr=args.pthr, refresh=args.refresh)
             n = sum(len(v) for v in pubs["results"].values())
-            provenance["publications"] = f"STRING PMID · {len(pubs['results'])} contrastes · {n} PMID"
+            provenance["publications"] = f"STRING PMID · {len(pubs['results'])} contrasts · {n} PMIDs"
             for c, info in pubs["provenance"].items():
                 provenance[f"pub[{c}]"] = info
 
     # ---- KPIs ----
     n_go_sig = int(go_res["matrix"].notna().sum().sum()) if not go_res["matrix"].empty else 0
     kpis = {
-        "Contrastes": len(stats.contrasts),
+        "Contrasts": len(stats.contrasts),
         "Conditions": len(stats.conditions),
-        "Échantillons": len(stats.sample_int_cols),
-        "Protéines": len(stats.comp),
-        "Cellules GO sig.": n_go_sig,
-        "Var. PC1": f"{explore['pca']['var_exp'][0]:.0f}%",
+        "Samples": len(stats.sample_int_cols),
+        "Proteins": len(stats.comp),
+        "Significant GO cells": n_go_sig,
+        "PC1 variance": f"{explore['pca']['var_exp'][0]:.0f}%",
     }
 
-    # ---- Résumé interprétatif ----
+    # ---- Interpretive summary ----
     resume = summary_mod.generate(stats, go_res, explore, provenance)
-    md_path = os.path.join(args.outdir, "pathfinder_resume.md")
+    md_path = os.path.join(args.outdir, "pathfinder_summary.md")
     try:
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(resume["markdown"])
@@ -287,7 +288,7 @@ def main(argv=None):
         with open(md_path, "w", encoding="utf-8") as f:
             f.write(resume["markdown"])
 
-    # ---- Sorties (robustes au verrou Windows si un fichier est ouvert) ----
+    # ---- Outputs (robust to Windows file locks) ----
     def _safe_write(writer_fn, path, label):
         try:
             writer_fn(path)
@@ -295,14 +296,14 @@ def main(argv=None):
         except PermissionError:
             import time as _t
             alt = path.replace(".", f"_{_t.strftime('%H%M%S')}.", 1)
-            print(f"[Pathfinder] ⚠ {os.path.basename(path)} verrouillé (ouvert dans un logiciel ?) "
-                  f"→ écriture dans {os.path.basename(alt)}")
+            print(f"[Pathfinder] ⚠ {os.path.basename(path)} is locked (open in another program?) "
+                  f"-> writing to {os.path.basename(alt)}")
             writer_fn(alt)
             return alt
 
     xlsx_path = _safe_write(lambda p: build_xlsx.build(p, go_res, explore, provenance, resume, pubs),
-                            os.path.join(args.outdir, "pathfinder_synthese.xlsx"), "xlsx")
-    # branding : mark SVG inline (fallback PNG base64)
+                            os.path.join(args.outdir, "pathfinder_synthesis.xlsx"), "xlsx")
+    # branding: inline SVG mark (PNG base64 fallback)
     import base64
     _here = os.path.dirname(os.path.abspath(__file__))
     icon_svg, icon_b64 = None, None

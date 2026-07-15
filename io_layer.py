@@ -1,13 +1,13 @@
 """
-Pathfinder — couche d'entrée commune.
+Pathfinder - shared input layer.
 
-Lit les Excel produits par Deimos (module DEP) et le module GO, et reconstruit
-les trois objets qui alimentent tous les axes. Aucune statistique n'est
-recalculée : on lit, on extrait, on reshape (règle fondamentale du pipeline).
+Reads the Excel workbooks produced by Deimos (DEP module) and the GO module, and
+rebuilds the objects feeding every axis. No statistic is recomputed: read, extract,
+reshape (the pipeline's founding rule).
 
-Reconnaissance par CONTENU, pas par nom de fichier :
-  - Stats  : une sheet contenant des colonnes '<C>_p.val' + une sheet 'Z-score_Heatmap'
-  - GO     : des sheets 'GO_*' avec une colonne 'term_name'
+Detection is CONTENT-based, not filename-based:
+  - Stats : a sheet carrying '<C>_p.val' columns + a per-sample intensity matrix
+  - GO    : 'GO_*' sheets carrying a 'term_name' column
 """
 from __future__ import annotations
 import re
@@ -20,7 +20,7 @@ import pandas as pd
 
 warnings.simplefilter("ignore", category=UserWarning)
 
-# Colonnes méta connues du module DEP (jamais des intensités échantillon)
+# Known metadata columns from the DEP module (never sample intensities)
 _META = {
     "name", "Protein.Group", "Protein.Names", "Genes", "First.Protein.Description",
     "N.Sequences", "N.Proteotypic.Sequences", "ID", "imputed", "num_NAs", "significant",
@@ -28,21 +28,21 @@ _META = {
 
 
 # --------------------------------------------------------------------------- #
-# Structures                                                                   #
+# Data structures                                                                   #
 # --------------------------------------------------------------------------- #
 @dataclass
 class StatsData:
-    comp: pd.DataFrame                    # sheet de comparaison (stats + accessions)
-    zscore: Optional[pd.DataFrame]        # sheet Z-score_Heatmap (peut être None)
-    pca_df: pd.DataFrame                  # sheet retenue pour la PCA (matrice par échantillon)
-    pca_source: str                       # nom de la sheet PCA
+    comp: pd.DataFrame                    # comparison sheet (stats + accessions)
+    zscore: Optional[pd.DataFrame]        # Z-score_Heatmap sheet (may be None)
+    pca_df: pd.DataFrame                  # sheet selected for the PCA (per-sample matrix)
+    pca_source: str                       # name of the PCA sheet
     contrasts: list                       # ['A_vs_B', ...]
-    sample_int_cols: list                 # colonnes intensité par échantillon (dans pca_df)
-    comp_sample_cols: list                 # colonnes intensité brutes dans comp (pour abondance)
-    conditions: list                      # ordre d'apparition
-    cond_map: dict                        # {colonne_echantillon: condition}
-    conditions_resolved: bool             # True si le mapping condition est fiable
-    id_col: str                           # colonne identifiant protéine
+    sample_int_cols: list                 # per-sample intensity columns (within pca_df)
+    comp_sample_cols: list                 # raw intensity columns in comp (for abundance)
+    conditions: list                      # order of appearance
+    cond_map: dict                        # {sample_column: condition}
+    conditions_resolved: bool             # True when the condition mapping is reliable
+    id_col: str                           # protein identifier column
     gene_col: Optional[str]
     desc_col: Optional[str]
 
@@ -63,7 +63,7 @@ def _norm(s: str) -> str:
 
 
 def _find_col(cols, *cands, contains_all=None):
-    """Recherche tolérante d'une colonne : égalité normalisée puis sous-chaînes."""
+    """Tolerant column lookup: normalised equality, then substring match."""
     ncols = {_norm(c): c for c in cols}
     for cand in cands:
         if _norm(cand) in ncols:
@@ -78,10 +78,10 @@ def _find_col(cols, *cands, contains_all=None):
 
 
 def map_sample_to_condition(sample_cols, conditions):
-    """Associe chaque colonne échantillon à sa condition.
+    """Map each sample column to its condition.
 
-    Priorité au préfixe le plus long parmi les conditions connues (robuste aux
-    noms contenant des underscores), fallback sur rsplit('_', 1).
+    Prefers the longest matching prefix among known conditions (robust to names
+    containing underscores), falling back to rsplit('_', 1).
     """
     conds_sorted = sorted(conditions, key=len, reverse=True)
     cond_map = {}
@@ -96,11 +96,11 @@ def map_sample_to_condition(sample_cols, conditions):
 
 
 # --------------------------------------------------------------------------- #
-# Stats                                                                         #
+# Statistics                                                                         #
 # --------------------------------------------------------------------------- #
 def load_design_frame(path_or_df):
-    """Lit un design et renvoie (df, label_col) — toutes les colonnes conservées
-    pour un usage multi-facteurs (condition, traitement, batch, ordre d'injection…)."""
+    """Read a design and return (df, label_col) - every column is kept for
+    multi-factor use (condition, treatment, batch, injection order...)."""
     if isinstance(path_or_df, pd.DataFrame):
         df = path_or_df.copy()
     elif str(path_or_df).lower().endswith((".csv", ".tsv", ".txt")):
@@ -123,9 +123,8 @@ def load_design_frame(path_or_df):
 
 
 def map_design_factors(sample_cols, df, label_col, cond_map=None):
-    """Aligne les colonnes échantillon avec les lignes du design (par nom, sinon
-    positionnellement) et renvoie un DataFrame indexé par colonne échantillon,
-    une colonne par facteur."""
+    """Align sample columns with design rows (by name, else positionally) and return
+    a DataFrame indexed by sample column, one column per factor."""
     labels = [str(x).strip() for x in df[label_col].tolist()]
     byname = {l: i for i, l in enumerate(labels)}
     byname.update({_norm(l): i for i, l in enumerate(labels)})
@@ -146,10 +145,10 @@ def map_design_factors(sample_cols, df, label_col, cond_map=None):
 
 
 def load_design(path_or_df):
-    """Lit un ExperimentalDesign (CSV/xlsx/DataFrame) → {label_échantillon: condition}.
+    """Read an ExperimentalDesign (CSV/xlsx/DataFrame) -> {sample_label: condition}.
 
-    Détection tolérante des colonnes label et condition. Clé indexée en brut ET
-    normalisé pour tolérer les variantes de séparateur (Sple-1 / Sple_1).
+    Tolerant detection of the label and condition columns. Keys are indexed raw AND
+    normalised to tolerate separator variants (Sple-1 / Sple_1).
     """
     if isinstance(path_or_df, pd.DataFrame):
         df = path_or_df
@@ -169,7 +168,7 @@ def load_design(path_or_df):
     cond_col = _find_col(df.columns, "condition", "group", "groupe", "class",
                          "treatment", "type", "category", "cond")
     if label_col is None or cond_col is None:
-        # heuristique : 1re colonne = label, colonne la moins unique = condition
+        # heuristic: first column = label, least-unique column = condition
         label_col = label_col or df.columns[0]
         if cond_col is None:
             nunq = {c: df[c].nunique() for c in df.columns if c != label_col}
@@ -180,56 +179,8 @@ def load_design(path_or_df):
         lab, cond = str(r[label_col]).strip(), str(r[cond_col]).strip()
         mp[lab] = cond
         mp[_norm(lab)] = cond
-    mp["__order__"] = [str(x).strip() for x in df[cond_col].tolist()]   # repli positionnel
+    mp["__order__"] = [str(x).strip() for x in df[cond_col].tolist()]   # positional fallback
     return mp
-
-
-def find_design_in_workbook(path, sample_cols, contrasts):
-    """Cherche un mapping échantillon→condition dans N'IMPORTE quelle sheet, par CONTENU.
-
-    Critère : une colonne dont les valeurs recouvrent les noms d'échantillons, plus
-    une autre colonne peu cardinale (candidate condition). Bonus si ses valeurs
-    matchent les tokens de conditions extraits des contrastes.
-    """
-    want = {_norm(c) for c in sample_cols}
-    cond_tokens = set()
-    for c in contrasts or []:
-        for t in str(c).split("_vs_"):
-            cond_tokens.add(_norm(t))
-
-    best = None
-    try:
-        sheets = pd.read_excel(path, sheet_name=None)
-    except Exception:
-        return None, None
-    for name, df in sheets.items():
-        if df.empty or df.shape[1] < 2:
-            continue
-        for lab_c in df.columns:
-            vals = {_norm(v) for v in df[lab_c].dropna().astype(str)}
-            cover = len(want & vals) / max(len(want), 1)
-            if cover < 0.8:                       # doit couvrir la plupart des échantillons
-                continue
-            for cond_c in df.columns:
-                if cond_c == lab_c:
-                    continue
-                nun = df[cond_c].nunique(dropna=True)
-                if not (1 < nun < len(df)):       # ni constant ni unique par ligne
-                    continue
-                cvals = {_norm(v) for v in df[cond_c].dropna().astype(str)}
-                match = len(cvals & cond_tokens) / max(len(cvals), 1) if cond_tokens else 0
-                score = cover + match
-                if best is None or score > best[0]:
-                    best = (score, name, lab_c, cond_c, df)
-    if not best:
-        return None, None
-    _, name, lab_c, cond_c, df = best
-    mp = {}
-    for _, r in df.iterrows():
-        lab, cond = str(r[lab_c]).strip(), str(r[cond_c]).strip()
-        mp[lab] = cond
-        mp[_norm(lab)] = cond
-    return mp, f"{name}#{lab_c}→{cond_c}"
 
 
 def load_stats(path: str, design_map=None) -> StatsData:
@@ -253,8 +204,8 @@ def load_stats(path: str, design_map=None) -> StatsData:
             z_df = df
             break
 
-    # 3) identification POSITIVE des colonnes échantillon (par sheet)
-    #    Exclut : méta, colonnes de contraste (contiennent '_vs_'), annotations.
+    # 3) POSITIVE identification of sample columns (per sheet)
+    #    Excludes: metadata, contrast columns (containing '_vs_'), annotations.
     stat_cols = set()
     for c in contrasts:
         for suf in ("_diff", "_p.val", "_p.adj"):
@@ -283,14 +234,14 @@ def load_stats(path: str, design_map=None) -> StatsData:
     comp_samples = _samples(comp_df)
     z_samples = _samples(z_df) if z_df is not None else []
 
-    # 4) matrice PCA = sheet avec le plus de colonnes échantillon (préférence Z-score
-    #    si elle en contient autant/plus : c'est la matrice par échantillon la plus propre)
+    # 4) PCA matrix = sheet with the most sample columns (prefer Z-score when it has
+    #    as many or more: it is the cleanest per-sample matrix)
     if z_df is not None and len(z_samples) >= max(len(comp_samples), 1):
         pca_df, pca_source, sample_int_cols = z_df, "Z-score_Heatmap", z_samples
     else:
         pca_df, pca_source, sample_int_cols = comp_df, comp_sheet, comp_samples
 
-    # 5) conditions : via design si fourni, sinon déduites des noms de colonnes
+    # 5) conditions: from the design when provided, else parsed from column names
     def _cond_of(col):
         return str(col).rsplit("_", 1)[0]
 
@@ -301,20 +252,20 @@ def load_stats(path: str, design_map=None) -> StatsData:
             if v is not None:
                 hits += 1
             cond_map[c] = v if v is not None else _cond_of(c)
-        # repli positionnel : libellés du design != noms de colonnes (ex. fichiers .raw
-        # côté design vs Sple-N côté matrice) mais même effectif → mapping par ordre.
+        # positional fallback: design labels != column names (e.g. .raw filenames in the
+        # design vs Sple-N in the matrix) but same count -> map by order.
         order = design_map.get("__order__")
         if hits < 0.5 * len(sample_int_cols) and order and len(order) == len(sample_int_cols):
             cond_map = {c: order[i] for i, c in enumerate(sample_int_cols)}
             hits = len(sample_int_cols)
-            print("[Pathfinder] ⚠ libellés du design non reconnus dans les colonnes : "
-                  "mapping POSITIONNEL appliqué (même effectif). Vérifie l'ordre des lignes du design.")
+            print("[Pathfinder] ⚠ design labels not recognised among the columns: "
+                  "POSITIONAL mapping applied (same count). Check the row order of the design.")
         conditions_resolved = hits >= 0.5 * len(sample_int_cols) and \
             len(set(cond_map.values())) < len(sample_int_cols)
     else:
         conditions = list(dict.fromkeys(_cond_of(c) for c in sample_int_cols))
         cond_map = map_sample_to_condition(sample_int_cols, conditions)
-        # résolu seulement si le parsing a réellement groupé (moins de conditions que d'échantillons)
+        # resolved only if parsing actually grouped (fewer conditions than samples)
         conditions_resolved = len(set(cond_map.values())) < len(sample_int_cols)
 
     seen = []
@@ -340,9 +291,9 @@ def load_stats(path: str, design_map=None) -> StatsData:
 # GO                                                                            #
 # --------------------------------------------------------------------------- #
 def _map_go_sheet(sheet: str, contrasts):
-    """Associe une sheet 'GO_<abbrev>' au contraste '<A>_vs_<B>' correspondant."""
+    """Map a 'GO_<abbrev>' sheet to its matching '<A>_vs_<B>' contrast."""
     s = re.sub(r"^GO[_-]?", "", str(sheet), flags=re.I)
-    # tokens de la sheet : coupe sur '_vs_' ou un 'v' isolé entre deux mots
+    # sheet tokens: split on '_vs_' or a lone 'v' between two words
     s2 = re.sub(r"([A-Za-z0-9])v([A-Z])", r"\1_vs_\2", s)
     sheet_toks = {_norm(t) for t in re.split(r"_vs_|_", s2) if t}
 
@@ -354,7 +305,7 @@ def _map_go_sheet(sheet: str, contrasts):
             score = inter / max(len(sheet_toks), len(c_toks))
         else:
             score = 0.0
-        # départage par similarité de caractères
+        # tie-break on character similarity
         score += 0.001 * sum(1 for a, b in zip(sorted(_norm(s)), sorted(_norm(c))) if a == b)
         if score > best_score:
             best, best_score = c, score
@@ -368,7 +319,7 @@ def load_go(path: str, contrasts) -> GOData:
     if not go_sheets:
         raise ValueError("Aucune sheet 'GO_*' avec colonne 'term_name' : fichier GO non reconnu.")
 
-    # colonnes détectées sur la première sheet, supposées homogènes
+    # columns detected on the first sheet, assumed homogeneous
     sample_df = next(iter(go_sheets.values()))
     c_source = _find_col(sample_df.columns, "source")
     c_termid = _find_col(sample_df.columns, "term_id", "native")

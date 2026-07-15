@@ -1,4 +1,4 @@
-"""Jeu synthétique conforme au schéma Deimos pour tester Pathfinder."""
+
 import numpy as np
 import pandas as pd
 from itertools import combinations
@@ -9,7 +9,7 @@ reps = 4
 N = 800
 samples = [f"{c}_{i+1}" for c in conds for i in range(reps)]
 
-# intensités log2 LFQ : effet condition sur un sous-ensemble de protéines
+# log2 LFQ intensities: condition effect on a subset of proteins
 base = rng.normal(20, 2, size=(N, 1))
 eff = np.zeros((N, len(conds)))
 eff[:120, 1] = rng.normal(1.5, 0.4, 120)      # up TreatA
@@ -28,7 +28,7 @@ comp.insert(0, "Protein.Group", accs)
 comp.insert(1, "Genes", genes)
 comp.insert(2, "First.Protein.Description", desc)
 
-# stats par contraste
+# per-contrast statistics
 contrasts = ["_vs_".join(c) for c in combinations(conds, 2)]
 sig_any = np.zeros(N, bool)
 for c in contrasts:
@@ -52,14 +52,14 @@ zdf.insert(0, "Protein.Group", accs)
 zdf.insert(1, "Genes", genes)
 zdf.insert(2, "First.Protein.Description", desc)
 
-with pd.ExcelWriter("rapportstatistique.xlsx") as xw:
+with pd.ExcelWriter("Proteomic_Results.xlsx") as xw:
     comp.to_excel(xw, sheet_name="Comparaison", index=False)
     zdf.to_excel(xw, sheet_name="Z-score_Heatmap", index=False)
 
-# GO : une sheet par contraste, colonnes gprofiler + z_score
+# GO: one sheet per contrast, gProfiler columns + z_score
 sources = ["GO:BP", "GO:CC", "GO:MF", "REAC", "KEGG"]
-go_terms = [(f"GO:{1000000+i}", f"terme biologique {i}", sources[i % 5]) for i in range(60)]
-with pd.ExcelWriter("rapportenrichissementGO.xlsx") as xw:
+go_terms = [(f"GO:{1000000+i}", f"biological term {i}", sources[i % 5]) for i in range(60)]
+with pd.ExcelWriter("GO_Results.xlsx") as xw:
     for c in contrasts:
         abbr = c.replace("_vs_", "v")
         rows = []
@@ -74,4 +74,10 @@ with pd.ExcelWriter("rapportenrichissementGO.xlsx") as xw:
                          "intersection": inter, "z_score": zval})
         pd.DataFrame(rows).to_excel(xw, sheet_name=f"GO_{abbr}", index=False)
 
-print("Synthétique généré :", samples, "|", contrasts)
+# experimental design (multi-factor)
+pd.DataFrame({"sample": samples,
+              "condition": [s.rsplit("_", 1)[0] for s in samples],
+              "batch": ["B1"] * (len(samples) // 2) + ["B2"] * (len(samples) - len(samples) // 2),
+              "injection_order": range(1, len(samples) + 1)}).to_csv("ExperimentalDesign.csv", index=False)
+print("Synthetic dataset written:", samples, "|", contrasts)
+print("-> Proteomic_Results.xlsx, GO_Results.xlsx, ExperimentalDesign.csv")

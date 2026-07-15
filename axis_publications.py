@@ -1,14 +1,14 @@
 """
-Axe A — Publications (online).
+Publications axis (online).
 
-Pour chaque contraste, prend les protéines significatives et interroge
-l'enrichissement PMID de STRING : « quels articles sont sur-représentés dans
-cette signature ». Résultats mis en cache (clé = accessions+taxid+endpoint) avec
-date de fetch (snapshot), car le corpus littérature évolue dans le temps.
+For each contrast, takes the significant proteins and queries STRING's PMID
+enrichment: "which papers are over-represented in this signature". Results are
+cached (key = accessions+taxid+endpoint) with a fetch date (snapshot), because the
+literature corpus evolves over time.
 
-Opt-in (--online). Nécessite un taxid (résolu depuis --org gprofiler).
-Biais connu : sur-représentation des protéines très étudiées → à lire avec le
-LFC/Pi en tête (on classe par FDR mais on trie les gènes d'entrée par |LFC|).
+Opt-in (--online). Requires a taxid (resolved from --org, a gProfiler organism).
+Known bias: heavily studied proteins are over-represented -> read alongside the
+LFC/Pi score (input genes are ranked by |LFC| to attenuate it).
 """
 from __future__ import annotations
 import pandas as pd
@@ -19,7 +19,7 @@ STRING_URL = "https://string-db.org/api/tsv/enrichment"
 
 
 def _string_request(identifiers, taxid, timeout=30):
-    """Appel réel STRING (POST). Levé si réseau indisponible → axe A ignoré proprement."""
+    """Live STRING call (POST). Raises if the network is unavailable -> axis skipped cleanly."""
     import requests
     data = {"identifiers": "\r".join(map(str, identifiers)),
             "species": int(taxid), "caller_identity": "pathfinder"}
@@ -48,7 +48,7 @@ def _parse_pmid(tsv, top=15):
         pmid = term.split(":")[-1] if term else ""
         rows.append({
             "pmid": pmid,
-            "titre": col(r, "description"),
+            "title": col(r, "description"),
             "n_genes": col(r, "number_of_genes"),
             "genes": col(r, "preferredNames", "inputGenes"),
             "fdr": pd.to_numeric(col(r, "fdr"), errors="coerce"),
@@ -60,7 +60,7 @@ def _parse_pmid(tsv, top=15):
 
 
 def _sig_identifiers(stats, contrast, p_thr, max_ids):
-    """Gènes (défaut) ou accessions des protéines sig d'un contraste, triés par |LFC|."""
+    """Genes (default) or accessions of a contrast's significant proteins, ranked by |LFC|."""
     comp = stats.comp
     padj, diff = f"{contrast}_p.adj", f"{contrast}_diff"
     if padj not in comp.columns:
@@ -71,7 +71,7 @@ def _sig_identifiers(stats, contrast, p_thr, max_ids):
         sub = sub.sort_values("_abs", ascending=False)
     idcol = stats.gene_col if (stats.gene_col in comp.columns) else stats.id_col
     ids = [str(x) for x in sub[idcol].dropna().tolist() if str(x) not in ("", "nan")]
-    # dédoublonne en gardant l'ordre
+    # de-duplicate while preserving order
     seen, out = set(), []
     for x in ids:
         if x not in seen:
@@ -95,13 +95,13 @@ def run(stats, taxid, p_thr=0.05, max_ids=400, top_pmid=15, refresh=False, fetch
             try:
                 tsv = fetch(ids, taxid)
             except Exception as e:
-                prov[c] = f"échec réseau ({type(e).__name__})"
+                prov[c] = f"network failure ({type(e).__name__})"
                 continue
             rows = _parse_pmid(tsv, top_pmid)
             put = cache.put(ids, taxid, "string_pmid", rows)
             when = put["_fetch_date"]
         results[c] = rows
-        prov[c] = f"{len(ids)} gènes → {len(rows)} PMID (fetch {when})"
+        prov[c] = f"{len(ids)} genes -> {len(rows)} PMIDs (fetched {when})"
     return {"results": results, "provenance": prov, "taxid": taxid}
 
 
@@ -109,5 +109,5 @@ def to_dataframe(pub):
     recs = []
     for c, rows in pub["results"].items():
         for r in rows:
-            recs.append({"contraste": c, **r})
+            recs.append({"contrast": c, **r})
     return pd.DataFrame(recs)

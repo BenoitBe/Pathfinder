@@ -1,7 +1,7 @@
 # Pathfinder outputs
 pathfinder_report*.html
-pathfinder_synthese*.xlsx
-pathfinder_resume*.md
+pathfinder_synthesis*.xlsx
+pathfinder_summary*.md
 ExperimentalDesign_template.csv
 out*/
 example_data/*.xlsx

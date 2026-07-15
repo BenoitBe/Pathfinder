@@ -1,13 +1,14 @@
 """
-Axe C — Exploration non supervisée du design.
+Exploration axis - unsupervised assessment of the experimental design.
 
-- PCA reproduisant DEP::plot_pca (SVD sur matrice centrée samples x proteins).
-- Scree + loadings (protéines portant chaque PC).
-- Association PC <-> facteur : Kruskal-Wallis du score de PC par condition + eps^2
-  (taille d'effet). C'est ce qui révèle si un axe capture le design ou un effet batch.
-- Corrélation inter-échantillons (Pearson) + ordre hiérarchique.
-- UMAP : garde-fou n_samples < 4 x n_conditions -> bascule sur UMAP protéines,
-  avec avertissement. Optionnel (skip propre si umap-learn absent).
+- PCA mirroring DEP::plot_pca (SVD on the centred samples x proteins matrix).
+- Scree + loadings (proteins driving each PC).
+- PC <-> factor association: Kruskal-Wallis of PC scores by condition + epsilon^2
+  (effect size); Spearman for numeric factors (e.g. injection order). This is what
+  reveals whether an axis captures the design or a batch effect.
+- Inter-sample correlation (Pearson) + hierarchical ordering.
+- UMAP: guard-rail n_samples < 4 x n_conditions -> sample UMAP skipped in favour of
+  the PCA; protein UMAP always available. Optional (skipped if umap-learn absent).
 """
 from __future__ import annotations
 import numpy as np
@@ -19,9 +20,9 @@ from scipy.cluster.hierarchy import linkage, leaves_list
 def pca(comp: pd.DataFrame, sample_int_cols, cond_map, id_labels=None):
     if len(sample_int_cols) < 3:
         raise ValueError(
-            f"Seulement {len(sample_int_cols)} colonne(s) échantillon détectée(s) : "
-            "la matrice par échantillon (intensités par run) est introuvable dans ce classeur. "
-            "Lance --diagnose pour localiser la sheet, ou fournis le fichier d'intensités.")
+            f"Only {len(sample_int_cols)} sample column(s) detected: the per-sample matrix "
+            "(per-run intensities) could not be found in this workbook. Run --diagnose to locate "
+            "the sheet, or provide the intensity file.")
     mat = comp[sample_int_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0).values.T  # samples x proteins
     mat_c = mat - mat.mean(axis=0)
     U, S, Vt = np.linalg.svd(mat_c, full_matrices=False)
@@ -43,7 +44,7 @@ def pca(comp: pd.DataFrame, sample_int_cols, cond_map, id_labels=None):
 
 
 def pc_factor_association(scores_df: pd.DataFrame) -> pd.DataFrame:
-    """Kruskal-Wallis du score de chaque PC groupé par condition + epsilon^2."""
+    """Kruskal-Wallis of each PC score grouped by condition + epsilon^2 (effect size)."""
     conds = scores_df["condition"].values
     groups_idx = {g: np.where(conds == g)[0] for g in pd.unique(conds)}
     k = len(groups_idx)
@@ -63,9 +64,9 @@ def pc_factor_association(scores_df: pd.DataFrame) -> pd.DataFrame:
             H, p, eps2 = np.nan, np.nan, np.nan
         recs.append({"PC": pc, "H": H, "p_value": p, "epsilon2": eps2})
     out = pd.DataFrame(recs)
-    # epsilon^2 : borné à [0,1] (les valeurs négatives = absence d'association, artefact de formule)
+    # epsilon^2 clipped to [0,1] (negative values mean no association, a formula artefact)
     out["epsilon2"] = out["epsilon2"].clip(lower=0.0, upper=1.0)
-    # correction multiple sur l'ensemble des PC testées (Benjamini-Hochberg)
+    # multiple-testing correction across all tested PCs (Benjamini-Hochberg)
     p = out["p_value"].values.astype(float)
     ok = np.isfinite(p)
     padj = np.full(len(p), np.nan)
@@ -94,12 +95,12 @@ def _bh(p):
 
 
 def pc_factor_multi(scores_df, factors_df, max_pc=6):
-    """Teste chaque PC contre chaque facteur du design.
+    """Test every PC against every design factor.
 
-    - facteur catégoriel  : Kruskal-Wallis + ε² (taille d'effet)
-    - facteur numérique   : corrélation de Spearman (|rho| comme taille d'effet)
-      → typiquement l'ordre d'injection : un |rho| élevé sur une PC = dérive technique.
-    Correction BH sur l'ensemble des tests.
+    - categorical factor : Kruskal-Wallis + epsilon^2 (effect size)
+    - numeric factor     : Spearman correlation (|rho| as effect size)
+      -> typically the injection order: a high |rho| on a PC means technical drift.
+    BH correction across all tests.
     """
     if factors_df is None or factors_df.empty:
         return pd.DataFrame()
@@ -116,9 +117,9 @@ def pc_factor_multi(scores_df, factors_df, max_pc=6):
                     rho, p = stats.spearmanr(num.values.astype(float), y)
                 except Exception:
                     rho, p = np.nan, np.nan
-                recs.append({"facteur": str(fac), "type": "numérique", "PC": pc,
+                recs.append({"factor": str(fac), "type": "numeric", "PC": pc,
                              "test": "Spearman", "stat": rho, "p_value": p,
-                             "effet": abs(rho) if np.isfinite(rho) else np.nan})
+                             "effect": abs(rho) if np.isfinite(rho) else np.nan})
             else:
                 groups = [y[np.where(vals.values == g)[0]] for g in pd.unique(vals.values)]
                 groups = [g for g in groups if len(g) > 0]
@@ -131,18 +132,18 @@ def pc_factor_multi(scores_df, factors_df, max_pc=6):
                     eps2 = (H - k + 1) / (n - k) if np.isfinite(H) else np.nan
                 else:
                     H, p, eps2 = np.nan, np.nan, np.nan
-                recs.append({"facteur": str(fac), "type": "catégoriel", "PC": pc,
+                recs.append({"factor": str(fac), "type": "categorical", "PC": pc,
                              "test": "Kruskal-Wallis", "stat": H, "p_value": p,
-                             "effet": min(max(eps2, 0.0), 1.0) if np.isfinite(eps2) else np.nan})
+                             "effect": min(max(eps2, 0.0), 1.0) if np.isfinite(eps2) else np.nan})
     out = pd.DataFrame(recs)
     if not out.empty:
         out["p_adj_BH"] = _bh(out["p_value"].values)
-        out = out[["facteur", "type", "PC", "test", "stat", "p_value", "p_adj_BH", "effet"]]
+        out = out[["factor", "type", "PC", "test", "stat", "p_value", "p_adj_BH", "effect"]]
     return out
 def sample_correlation(comp: pd.DataFrame, sample_int_cols):
     X = comp[sample_int_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
     corr = X.corr(method="pearson")
-    # ordre hiérarchique
+    # hierarchical ordering
     try:
         d = 1 - corr.values
         np.fill_diagonal(d, 0.0)
@@ -156,7 +157,7 @@ def sample_correlation(comp: pd.DataFrame, sample_int_cols):
 
 
 def umap_samples(comp, sample_int_cols, cond_map):
-    """UMAP échantillons (design), gardé : n_samples >= 4×n_conditions."""
+    """Sample UMAP (design view), guarded: requires n_samples >= 4 x n_conditions."""
     try:
         import umap  # noqa
     except Exception:
@@ -164,7 +165,7 @@ def umap_samples(comp, sample_int_cols, cond_map):
     n = len(sample_int_cols)
     ncond = len(set(cond_map[c] for c in sample_int_cols))
     if n < max(4 * ncond, 10):
-        return {"df": None, "warning": f"n={n} pour {ncond} conditions : UMAP échantillons non fiable, PCA préférée."}
+        return {"df": None, "warning": f"n={n} for {ncond} conditions: sample UMAP unreliable, PCA preferred."}
     X = comp[sample_int_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0).values.T
     emb = umap.UMAP(n_neighbors=min(15, n - 1), min_dist=0.1, random_state=0).fit_transform(X)
     df = pd.DataFrame(emb, columns=["UMAP1", "UMAP2"], index=sample_int_cols)
@@ -173,17 +174,17 @@ def umap_samples(comp, sample_int_cols, cond_map):
 
 
 def umap_proteins(comp, sample_cols, contrasts, labels, ids, max_pts=6000):
-    """UMAP protéines (structure fonctionnelle) + valeurs de coloriage.
+    """Protein UMAP (functional structure) + colouring values.
 
-    Coloriage : abondance moyenne (log2), LFC par contraste, et (via build_html)
-    appartenance GO. `labels`=gènes, `ids`=accessions (pour matcher les intersections GO).
+    Colouring: mean abundance (log2), per-contrast LFC, and (via build_report_html)
+    GO membership. `labels`=genes, `ids`=accessions (to match GO intersections).
     """
     try:
         import umap  # noqa
     except Exception:
-        return {"df": None, "warning": "umap-learn absent — UMAP protéines ignoré."}
+        return {"df": None, "warning": "umap-learn not installed — protein UMAP skipped."}
     if len(sample_cols) < 3:
-        return {"df": None, "warning": "pas de matrice d'intensité par échantillon pour l'UMAP protéines."}
+        return {"df": None, "warning": "no per-sample intensity matrix available for the protein UMAP."}
     X = comp[sample_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0).values  # proteins x samples
     idx = np.arange(X.shape[0])
     if X.shape[0] > max_pts:
@@ -203,7 +204,7 @@ def umap_proteins(comp, sample_cols, contrasts, labels, ids, max_pts=6000):
 
 
 def run(stats_data, do_umap=True, factors_df=None):
-    comp = stats_data.pca_df                       # matrice par échantillon retenue
+    comp = stats_data.pca_df                       # per-sample matrix selected by the loader
     cols = stats_data.sample_int_cols
     cmap = stats_data.cond_map
     gcol = stats_data.gene_col if (stats_data.gene_col in comp.columns) else None
@@ -217,22 +218,22 @@ def run(stats_data, do_umap=True, factors_df=None):
 
     pca_res = pca(comp, cols, cmap, id_labels=labels)
     assoc = pc_factor_association(pca_res["scores"])
-    # corrélation QC : intensités BRUTES si disponibles (z-scores décorrélés par
-    # construction) ; sinon repli sur la matrice PCA effectivement chargée.
+    # QC correlation: RAW intensities when available (per-protein z-scores are
+    # decorrelated by construction); otherwise fall back to the loaded PCA matrix.
     raw_df, raw_cols = stats_data.comp, [c for c in cols if c in stats_data.comp.columns]
     if len(raw_cols) < 3:
         raw_cols = [c for c in (stats_data.comp_sample_cols or []) if c in stats_data.comp.columns]
-    if len(raw_cols) < 3:                      # comp ne porte pas d'intensités par échantillon
+    if len(raw_cols) < 3:                      # comp holds no per-sample intensities
         raw_df, raw_cols = comp, cols
     corr = sample_correlation(raw_df, raw_cols)
 
     umap_s = umap_p = None
     if do_umap:
         umap_s = umap_samples(comp, cols, cmap)
-        # base UMAP protéines : sheet portant réellement les colonnes échantillon
+        # protein UMAP base: the sheet that actually carries the sample columns
         base, raw = stats_data.comp, [c for c in (stats_data.comp_sample_cols or []) if c in stats_data.comp.columns]
         if len(raw) < 3:
-            base, raw = comp, cols                  # repli sur la matrice PCA (ex. Z-score)
+            base, raw = comp, cols                  # fall back to the PCA matrix (e.g. Z-score)
         glab = base[stats_data.gene_col].astype(str).values if (stats_data.gene_col in base.columns) \
             else base[stats_data.id_col].astype(str).values if (stats_data.id_col in base.columns) \
             else np.arange(len(base)).astype(str)

@@ -1,8 +1,8 @@
 """
-Rapport HTML autonome Pathfinder.
+Self-contained Pathfinder HTML report.
 
-Rendu 100% offline : figures générées en SVG côté Python (pas de CDN, pas de JS
-de charting). Palette cohérente avec le dashboard du pipeline.
+Fully offline rendering: figures are generated as SVG on the Python side (no CDN,
+no charting JS). Palette consistent with the pipeline dashboard.
 """
 from __future__ import annotations
 import html
@@ -14,8 +14,8 @@ BLUE = "#388bfd"; UP = "#f85149"; DOWN = "#388bfd"; GREEN = "#3fb950"; PURP = "#
 COND_PALETTE = ["#388bfd", "#3fb950", "#bc8cff", "#d29922", "#f85149", "#39c5cf", "#db61a2", "#a5d6ff",
                 "#7ee787", "#ffa657", "#d2a8ff", "#f2cc60", "#79c0ff", "#ff7b72", "#56d364", "#e3b341"]
 SRC_ORDER = ["GO:BP", "GO:MF", "GO:CC", "KEGG", "REAC"]
-SRC_LABEL = {"GO:BP": "GO:BP — Processus biologique", "GO:MF": "GO:MF — Fonction moléculaire",
-             "GO:CC": "GO:CC — Composant cellulaire", "KEGG": "KEGG", "REAC": "Reactome"}
+SRC_LABEL = {"GO:BP": "GO:BP — Biological process", "GO:MF": "GO:MF — Molecular function",
+             "GO:CC": "GO:CC — Cellular component", "KEGG": "KEGG", "REAC": "Reactome"}
 
 
 def _sources_present(meta):
@@ -29,7 +29,7 @@ def _esc(s):
 
 
 def _diverging(v, vmax):
-    """z signé -> couleur (rouge=up, bleu=down), NaN -> gris foncé."""
+    """signed z -> colour (red=up, blue=down), NaN -> dark grey."""
     if v is None or (isinstance(v, float) and np.isnan(v)):
         return "#1c2128"
     t = max(-1.0, min(1.0, v / vmax if vmax else 0.0))
@@ -45,7 +45,7 @@ def _diverging(v, vmax):
 # --------------------------------------------------------------------------- #
 def svg_meta_heatmap(matrix: pd.DataFrame, meta: pd.DataFrame, max_terms=40):
     if matrix.empty:
-        return "<p class='mut'>Aucun terme GO significatif.</p>"
+        return "<p class='mut'>No significant GO term.</p>"
     m = matrix.reindex(meta.sort_values("n_sig", ascending=False).index).head(max_terms)
     names = [meta.loc[k, "term_name"] for k in m.index]
     contrasts = list(m.columns)
@@ -69,9 +69,9 @@ def svg_meta_heatmap(matrix: pd.DataFrame, meta: pd.DataFrame, max_terms=40):
             x = left + j * cw
             tip = "" if pd.isna(v) else f"<title>{_esc(names[i])} — {_esc(c)} : z={v:.2f}</title>"
             s.append(f"<rect x='{x}' y='{y}' width='{cw-2}' height='{ch-2}' fill='{col}' rx='2'>{tip}</rect>")
-    # légende
+    # legend
     ly = H - 6
-    s.append(f"<text x='{left}' y='{ly}' fill='{MUT}' font-size='10'>bleu = down · rouge = up · gris = non-sig  (|z|max={vmax:.1f})</text>")
+    s.append(f"<text x='{left}' y='{ly}' fill='{MUT}' font-size='10'>blue = down · red = up · grey = not sig.  (max |z|={vmax:.1f})</text>")
     s.append("</svg>")
     return "".join(s)
 
@@ -83,7 +83,7 @@ def svg_scatter(df, xcol, ycol, cat_col, title_x, title_y, size=(520, 420)):
     cats = list(dict.fromkeys(df[cat_col].tolist())) if cat_col else [None]
     cmap = {c: COND_PALETTE[i % len(COND_PALETTE)] for i, c in enumerate(cats)}
 
-    # gouttière de légende : le nuage se rétracte, la légende ne le recouvre jamais
+    # legend gutter: the plot shrinks so the legend never overlaps it
     if cat_col:
         maxlab = max((len(str(c)) for c in cats[:14]), default=0)
         gutter = min(190, 26 + int(maxlab * 5.6))
@@ -114,7 +114,7 @@ def svg_scatter(df, xcol, ycol, cat_col, title_x, title_y, size=(520, 420)):
                  f"<title>{_esc(r.name if cat_col else '')} {_esc(r[cat_col]) if cat_col else ''}</title></circle>")
     s.append(f"<text x='{(pad + (W-right))/2:.0f}' y='{Hh-12}' fill='{MUT}' font-size='11' text-anchor='middle'>{_esc(title_x)}</text>")
     s.append(f"<text x='14' y='{Hh/2}' fill='{MUT}' font-size='11' text-anchor='middle' transform='rotate(-90 14 {Hh/2})'>{_esc(title_y)}</text>")
-    # légende dans la gouttière
+    # legend inside the gutter
     if cat_col:
         lx = W - gutter + 8
         for i, c in enumerate(cats[:14]):
@@ -155,7 +155,7 @@ def svg_scatter_value(df, xcol, ycol, valcol, diverging, size=(560, 440), r=3):
          f"<rect x='0' y='0' width='{W}' height='{Hh}' fill='{PANEL}' rx='6'/>"]
     for x, y, v in zip(xs, ys, vals):
         s.append(f"<circle cx='{px(x):.1f}' cy='{py(y):.1f}' r='{r}' fill='{color(v)}' fill-opacity='0.8'/>")
-    # barre de légende
+    # legend bar
     s.append(f"<text x='{W/2}' y='{Hh-10}' fill='{MUT}' font-size='11' text-anchor='middle'>{_esc(xcol)} / {_esc(ycol)}</text>")
     s.append("</svg>")
     return "".join(s)
@@ -171,7 +171,7 @@ def svg_scatter_colored(df, xcol, ycol, colors, legend, size=(560, 440), r=3):
     def py(y): return Hh - pad - (y - ymin) / yr * (Hh - 2 * pad)
     s = [f"<svg viewBox='0 0 {W} {Hh}' width='100%' style='max-width:{W}px'>",
          f"<rect x='0' y='0' width='{W}' height='{Hh}' fill='{PANEL}' rx='6'/>"]
-    # points gris d'abord, colorés au-dessus
+    # grey points first, coloured on top
     order = np.argsort([0 if c == "#30363d" else 1 for c in colors])
     for i in order:
         s.append(f"<circle cx='{px(xs[i]):.1f}' cy='{py(ys[i]):.1f}' r='{r if colors[i]!='#30363d' else 2}' "
@@ -186,8 +186,8 @@ def svg_scatter_colored(df, xcol, ycol, colors, legend, size=(560, 440), r=3):
 
 
 def _go_umap_widget(udf, meta, term_genes, max_terms=24):
-    """Widget interactif : UMAP protéines recoloriée par terme GO, avec sélecteurs
-    source et nombre de termes. Données embarquées, rendu canvas côté client."""
+    """Interactive widget: protein UMAP recoloured by GO term, with source and term-count
+    selectors. Data embedded, rendered client-side on a canvas."""
     import json as _json
 
     def nrm(x):
@@ -210,7 +210,7 @@ def _go_umap_widget(udf, meta, term_genes, max_terms=24):
     if not terms:
         return ""
 
-    # tokens par protéine + appartenance (indices de termes)
+    # tokens per protein + membership (term indices)
     coords, memb = [], []
     for _, r in udf.iterrows():
         toks = {nrm(p) for p in re.split(r"[;,|]", str(r.get("pid", ""))) if p.strip()}
@@ -225,8 +225,8 @@ def _go_umap_widget(udf, meta, term_genes, max_terms=24):
     src_opts = "".join(f"<option value='{_esc(s)}'>{_esc(SRC_LABEL.get(s, s))}</option>" for s in sources)
     tmpl = """
 <div class='goctl'>
-  <label>Source <select id='go_src'><option value='ALL'>Toutes</option>__SRC__</select></label>
-  <label>Termes <select id='go_k'><option>4</option><option selected>8</option><option>12</option><option>16</option><option>24</option></select></label>
+  <label>Source <select id='go_src'><option value='ALL'>All</option>__SRC__</select></label>
+  <label>Terms <select id='go_k'><option>4</option><option selected>8</option><option>12</option><option>16</option><option>24</option></select></label>
   <span id='go_info' class='mut'></span>
 </div>
 <canvas id='go_cv' width='1120' height='880' style='width:100%;max-width:560px;height:auto;background:#161b22;border-radius:6px'></canvas>
@@ -259,8 +259,8 @@ def _go_umap_widget(udf, meta, term_genes, max_terms=24):
      if(hit!==null){ ctx.fillStyle=PAL[pos[hit]%PAL.length]; ctx.beginPath(); ctx.arc(px(C[i][0]),py(C[i][1]),2.6,0,6.283); ctx.fill(); ncol++; } }
    var leg=document.getElementById('go_leg'); leg.innerHTML='';
    sel.forEach(function(ti,j){ var d=document.createElement('div'); d.className='legit';
-     d.innerHTML="<span class='sw' style='background:"+PAL[j%PAL.length]+"'></span>"+T[ti].n+" ["+T[ti].s+"] · "+T[ti].k+" contr."; leg.appendChild(d); });
-   document.getElementById('go_info').textContent=ncol+' / '+C.length+' protéines coloriées';
+     d.innerHTML="<span class='sw' style='background:"+PAL[j%PAL.length]+"'></span>"+T[ti].n+" ["+T[ti].s+"] · "+T[ti].k+" contrasts"; leg.appendChild(d); });
+   document.getElementById('go_info').textContent=ncol+' / '+C.length+' proteins coloured';
  }
  document.getElementById('go_src').addEventListener('change',draw);
  document.getElementById('go_k').addEventListener('change',draw);
@@ -270,7 +270,7 @@ def _go_umap_widget(udf, meta, term_genes, max_terms=24):
     return tmpl.replace("__SRC__", src_opts).replace("__DATA__", _json.dumps(data))
 
 
-import re  # noqa: E402 (utilisé par _go_overlay)
+import re  # noqa: E402 (used by the GO widget)
 
 
 def svg_scree(var_exp):
@@ -288,7 +288,7 @@ def svg_scree(var_exp):
                  f"<title>PC{i+1} : {v:.1f}%</title></rect>")
         s.append(f"<text x='{x+bw/2:.1f}' y='{Hh-pad+14}' fill='{MUT}' font-size='9' text-anchor='middle'>PC{i+1}</text>")
         s.append(f"<text x='{x+bw/2:.1f}' y='{Hh-pad-h-4:.1f}' fill='{FG}' font-size='9' text-anchor='middle'>{v:.0f}</text>")
-    s.append(f"<text x='{W/2}' y='16' fill='{FG}' font-size='11' text-anchor='middle'>Variance expliquée (%)</text>")
+    s.append(f"<text x='{W/2}' y='16' fill='{FG}' font-size='11' text-anchor='middle'>Explained variance (%)</text>")
     s.append("</svg>")
     return "".join(s)
 
@@ -311,7 +311,7 @@ def svg_corr(corr: pd.DataFrame):
             col = f"rgb(30,{g},60)"
             s.append(f"<rect x='{left+j*cell}' y='{top+i*cell}' width='{cell-1}' height='{cell-1}' fill='{col}'>"
                      f"<title>{_esc(ri)} / {_esc(cj)} : r={v:.3f}</title></rect>")
-    s.append(f"<text x='{left}' y='{H-4}' fill='{MUT}' font-size='9'>Pearson r (log₂ LFQ), ordonné par clustering</text>")
+    s.append(f"<text x='{left}' y='{H-4}' fill='{MUT}' font-size='9'>Pearson r (log₂ LFQ), ordered by clustering</text>")
     s.append("</svg>")
     return "".join(s)
 
@@ -340,7 +340,7 @@ def _table(df: pd.DataFrame, max_rows=60, floatfmt="{:.3g}"):
 # --------------------------------------------------------------------------- #
 def _resume_html(resume):
     if resume is None or not resume.get("sections"):
-        return "<p class='mut'>Résumé non disponible.</p>"
+        return "<p class='mut'>Summary unavailable.</p>"
     blocks = []
     for title, lines in resume["sections"]:
         items = []
@@ -358,25 +358,25 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
          "icon_b64": None, "icon_svg": None}
     if branding:
         b.update({k: v for k, v in branding.items() if v is not None})
-    tabs = ["Résumé", "Vue d'ensemble", "Méta-GO", "Exploration", "UMAP protéines"]
+    tabs = ["Summary", "Overview", "Meta-GO", "Exploration", "Protein UMAP"]
     # KPI cards
     kcards = "".join(
         f"<div class='kpi'><div class='kv'>{_esc(v)}</div><div class='kl'>{_esc(k)}</div></div>"
         for k, v in kpis.items())
 
-    # Vue d'ensemble
-    prov_tbl = _table(pd.DataFrame(list(provenance.items()), columns=["clé", "valeur"]), max_rows=30)
+    # Overview
+    prov_tbl = _table(pd.DataFrame(list(provenance.items()), columns=["key", "value"]), max_rows=30)
     overview = f"<div class='cards'>{kcards}</div><h3>Provenance</h3>{prov_tbl}"
 
-    # Méta-GO — ventilé par source
+    # Meta-GO — split by source
     matrix, meta, direction = meta_go["matrix"], meta_go["meta"], meta_go["directionality"]
     if matrix.empty:
-        metago = "<p class='mut'>Enrichissement GO non fourni — synthèse fonctionnelle non disponible.</p>"
+        metago = "<p class='mut'>GO enrichment not provided — functional synthesis unavailable.</p>"
     else:
         n_clusters = meta["redundancy_cluster"].nunique() if (meta["redundancy_cluster"] >= 0).any() else 0
-        parts = [f"<p class='mut'>{matrix.shape[0]} termes significatifs sur {matrix.shape[1]} "
-                 f"contraste(s) · {n_clusters} groupes de redondance (Jaccard). "
-                 f"Rouge = up, bleu = down, gris = non-sig.</p>"]
+        parts = [f"<p class='mut'>{matrix.shape[0]} significant terms across {matrix.shape[1]} "
+                 f"contrast(s) · {n_clusters} redundancy groups (Jaccard). "
+                 f"Red = up, blue = down, grey = not significant.</p>"]
         for src in _sources_present(meta):
             keys = meta.index[meta["source"] == src]
             sub_m = matrix.loc[keys]
@@ -385,7 +385,7 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
             hm = svg_meta_heatmap(sub_m, sub_meta)
             dtbl = _table(sub_dir, max_rows=25)
             parts.append(f"<h3>{_esc(SRC_LABEL.get(src, src))} "
-                         f"<span class='mut'>· {len(keys)} termes</span></h3>{hm}{dtbl}")
+                         f"<span class='mut'>· {len(keys)} terms</span></h3>{hm}{dtbl}")
         metago = "".join(parts)
 
     # Exploration
@@ -396,88 +396,88 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
     scree = svg_scree(pca["var_exp"])
     corr = svg_corr(explore["correlation"])
     assoc_tbl = _table(assoc, max_rows=10)
-    # top loadings PC1
+    # top PC1 loadings
     load = pca["loadings"]
     load_tbl = ""
     if "PC1" in load.columns:
         top = load.reindex(load["PC1"].abs().sort_values(ascending=False).index).head(15)
         load_tbl = _table(top[["PC1"] + [c for c in ["PC2", "PC3"] if c in top.columns]].reset_index()
-                          .rename(columns={"index": "protéine"}), max_rows=15)
-    # association vide (design non résolu) -> note au lieu d'un tableau vide
+                          .rename(columns={"index": "protein"}), max_rows=15)
+    # empty association (design unresolved) -> note instead of an empty table
     if assoc["p_value"].isna().all():
-        assoc_block = ("<p class='warn'>⚠ Test PC↔condition non calculable : conditions non résolues "
-                       "(chaque échantillon isolé) ou sans réplicats. Fournir un design "
-                       "(<code>--design</code>) pour activer ce test.</p>")
+        assoc_block = ("<p class='warn'>⚠ PC ↔ condition test not computable: conditions unresolved "
+                       "(each sample isolated) or no replicates. Provide a design "
+                       "(<code>--design</code>) to enable this test.</p>")
     else:
         assoc_block = _table(assoc, max_rows=10)
 
-    # UMAP échantillons (design)
+    # sample UMAP (design)
     umap_s_html = ""
     us = explore.get("umap_samples")
     if us:
         if us.get("df") is not None:
-            umap_s_html = ("<h3>UMAP échantillons</h3>"
+            umap_s_html = ("<h3>Sample UMAP</h3>"
                            + svg_scatter(us["df"], "UMAP1", "UMAP2", "condition", "UMAP1", "UMAP2"))
         elif us.get("warning"):
-            umap_s_html = f"<p class='mut'>UMAP échantillons : {_esc(us['warning'])}</p>"
+            umap_s_html = f"<p class='mut'>Sample UMAP: {_esc(us['warning'])}</p>"
 
-    # multi-facteurs : quel facteur porte quel axe
+    # multi-factor: which factor drives which axis
     multi = explore.get("pc_factor_multi")
     multi_block = ""
     if multi is not None and not multi.empty:
-        sig = multi[(multi["p_adj_BH"] < 0.1) | (multi["effet"] >= 0.14)]
-        show = (sig if len(sig) else multi).sort_values(["effet"], ascending=False)
+        sig = multi[(multi["p_adj_BH"] < 0.10) | (multi["effect"] >= 0.14)]
+        show = (sig if len(sig) else multi).sort_values(["effect"], ascending=False)
         multi_block = ("<h3>Quel facteur porte quel axe ? <span class='mut'>· PC × facteurs du design</span></h3>"
                        + _table(show, max_rows=24)
-                       + "<p class='mut'>Catégoriel : Kruskal-Wallis, effet = ε². Numérique (ex. ordre "
-                         "d'injection) : Spearman, effet = |rho|. Un facteur technique associé à une PC "
-                         "de forte variance ⇒ effet batch / dérive à corriger.</p>")
+                       + "<p class='mut'>Categorical: Kruskal-Wallis, effect = ε². Numeric (e.g. injection "
+                         "order): Spearman, effect = |rho|. A technical factor tied to a high-variance "
+                         "PC ⇒ batch effect / drift to correct.</p>")
 
     explore_html = (
         f"<div class='grid2'><div><h3>PCA — PC1 vs PC2</h3>{scatter}</div>"
         f"<div><h3>Scree</h3>{scree}</div></div>"
-        f"<h3>Association PC ↔ condition (Kruskal-Wallis, ε² = taille d'effet)</h3>{assoc_block}"
-        f"<p class='mut'>ε² élevé + p faible sur une PC ⇒ cet axe capture le facteur biologique ; "
-        f"sur une PC non désirée, suspecter un effet batch.</p>"
+        f"<h3>PC ↔ condition association (Kruskal-Wallis, ε² = effect size)</h3>{assoc_block}"
+        f"<p class='mut'>High ε² + low p on a PC ⇒ that axis captures the biological factor; "
+        f"on an unexpected PC, suspect a batch effect.</p>"
         f"{multi_block}"
-        f"<div class='grid2'><div><h3>Corrélation inter-échantillons</h3>{corr}</div>"
-        f"<div><h3>Top contributeurs PC1</h3>{load_tbl}</div></div>"
+        f"<div class='grid2'><div><h3>Inter-sample correlation</h3>{corr}</div>"
+        f"<div><h3>Top PC1 contributors</h3>{load_tbl}</div></div>"
         f"{umap_s_html}")
 
-    # UMAP protéines (onglet dédié)
+    # Protein UMAP (dedicated tab)
     up = explore.get("umap_proteins")
     if up and up.get("df") is not None:
         udf = up["df"]
-        blocks = ["<p class='mut'>Chaque point = une protéine, positionnée selon la similarité de "
-                  "son profil d'intensité entre échantillons. Le coloriage révèle la structure : "
-                  "zones de forte/faible abondance, et régions régulées par contraste.</p>"]
-        blocks.append("<h3>Coloriage par abondance moyenne (log2)</h3>"
+        blocks = ["<p class='mut'>Each point is a protein, positioned by the similarity of its "
+                  "intensity profile across samples. Colour reveals structure: high/low abundance "
+                  "zones, and regions regulated in each contrast.</p>"]
+        blocks.append("<h3>Coloured by mean abundance (log2)</h3>"
                       + svg_scatter_value(udf, "UMAP1", "UMAP2", "abondance", diverging=False))
         for c in up.get("contrasts_lfc", [])[:3]:
-            blocks.append(f"<h3>Coloriage par LFC — {_esc(c)} <span class='mut'>(rouge=up, bleu=down)</span></h3>"
+            blocks.append(f"<h3>Coloured by LFC — {_esc(c)} <span class='mut'>(red=up, blue=down)</span></h3>"
                           + svg_scatter_value(udf, "UMAP1", "UMAP2", f"LFC:{c}", diverging=True))
-        # coloriage par terme GO — widget interactif (source + nombre de termes)
+        # colour by GO term — interactive widget (source + term count)
         if not meta_go["matrix"].empty and meta_go.get("term_genes"):
             widget = _go_umap_widget(udf, meta_go["meta"], meta_go["term_genes"])
             if widget:
-                blocks.append("<h3>Coloriage par terme GO <span class='mut'>· interactif</span></h3>"
+                blocks.append("<h3>Coloured by GO term <span class='mut'>· interactive</span></h3>"
                               + widget
-                              + "<p class='mut'>Choisis la source (ex. GO:CC pour les compartiments) et le "
-                                "nombre de termes. Une fonction concentrée dans une région ⇒ co-régulation spatiale.</p>")
+                              + "<p class='mut'>Pick the source (e.g. GO:CC for compartments) and the number of "
+                                "terms. A function concentrated in one region ⇒ spatial co-regulation.</p>")
         umap_p_html = "".join(blocks)
     elif up and up.get("warning"):
         umap_p_html = f"<p class='mut'>{_esc(up['warning'])}</p>"
     else:
-        umap_p_html = "<p class='mut'>UMAP protéines indisponible.</p>"
+        umap_p_html = "<p class='mut'>Protein UMAP unavailable.</p>"
 
-    panels = {"Résumé": _resume_html(resume), "Vue d'ensemble": overview,
-              "Méta-GO": metago, "Exploration": explore_html, "UMAP protéines": umap_p_html}
+    panels = {"Summary": _resume_html(resume), "Overview": overview,
+              "Meta-GO": metago, "Exploration": explore_html, "Protein UMAP": umap_p_html}
 
-    # Publications (axe A) — onglet ajouté seulement si présent
+    # Publications (online axis) - tab added only when present
     if pubs is not None and any(pubs.get("results", {}).values()):
-        pub_parts = ["<p class='mut'>Articles sur-représentés dans la signature de chaque contraste "
-                     "(enrichissement PMID STRING, classé par FDR). Biais connu : les protéines très "
-                     "étudiées ressortent plus — à croiser avec le LFC.</p>"]
+        pub_parts = ["<p class='mut'>Papers over-represented in each contrast signature (STRING "
+                     "PMID enrichment, ranked by FDR). Known bias: heavily studied proteins surface "
+                     "more readily — cross-check against the LFC.</p>"]
         for c, rows in pubs["results"].items():
             if not rows:
                 continue
@@ -486,10 +486,10 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
                 link = f"<a href='{_esc(r.get('url',''))}' target='_blank' style='color:{BLUE}'>PMID:{_esc(r.get('pmid',''))}</a>"
                 fdr = r.get("fdr")
                 fdr_s = f"{fdr:.1e}" if isinstance(fdr, float) and fdr == fdr else ""
-                trs.append(f"<tr><td>{link}</td><td>{_esc(r.get('titre',''))}</td>"
+                trs.append(f"<tr><td>{link}</td><td>{_esc(r.get('title',''))}</td>"
                            f"<td>{_esc(r.get('n_genes',''))}</td><td>{fdr_s}</td></tr>")
-            pub_parts.append(f"<h3>{_esc(c)}</h3><table><thead><tr><th>PMID</th><th>Titre</th>"
-                             f"<th>#gènes</th><th>FDR</th></tr></thead><tbody>{''.join(trs)}</tbody></table>")
+            pub_parts.append(f"<h3>{_esc(c)}</h3><table><thead><tr><th>PMID</th><th>Title</th>"
+                             f"<th>#genes</th><th>FDR</th></tr></thead><tbody>{''.join(trs)}</tbody></table>")
         panels["Publications"] = "".join(pub_parts)
         tabs = tabs + ["Publications"]
     nav = "".join(f"<button class='tab{' active' if i==0 else ''}' onclick=\"show({i})\">{_esc(t)}</button>"
@@ -498,9 +498,9 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
         f"<section id='sec-{i}' class='panel' style='display:{'block' if i==0 else 'none'}'>{panels[t]}</section>"
         for i, t in enumerate(tabs))
 
-    doc = f"""<!doctype html><html lang='fr'><head><meta charset='utf-8'>
+    doc = f"""<!doctype html><html lang='en'><head><meta charset='utf-8'>
 <meta name='viewport' content='width=device-width, initial-scale=1'>
-<title>Pathfinder — Synthèse exploratoire</title>
+<title>Pathfinder — Exploration & Synthesis Report</title>
 <style>
 *{{box-sizing:border-box}} body{{margin:0;background:{BG};color:{FG};
  font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px}}

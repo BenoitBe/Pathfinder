@@ -1,28 +1,28 @@
-"""Export Excel de synthèse Pathfinder (matrices + tables)."""
+"""Pathfinder synthesis workbook export (matrices + tables)."""
 from __future__ import annotations
 import pandas as pd
 
 
 def build(path, meta_go, explore, provenance: dict, resume=None, pubs=None):
     with pd.ExcelWriter(path, engine="openpyxl") as xw:
-        # provenance en tête
-        pd.DataFrame(list(provenance.items()), columns=["clé", "valeur"]).to_excel(
+        # provenance first
+        pd.DataFrame(list(provenance.items()), columns=["key", "value"]).to_excel(
             xw, sheet_name="provenance", index=False)
 
-        # publications (axe A)
+        # publications (online axis)
         if pubs is not None:
             recs = []
             for c, rows in pubs.get("results", {}).items():
                 for r in rows:
-                    recs.append({"contraste": c, **r})
+                    recs.append({"contrast": c, **r})
             if recs:
                 pd.DataFrame(recs).to_excel(xw, sheet_name="Publications", index=False)
 
-        # résumé interprétatif
+        # interpretive summary
         if resume is not None and not resume["lines"].empty:
-            resume["lines"].to_excel(xw, sheet_name="resume", index=False)
+            resume["lines"].to_excel(xw, sheet_name="Summary", index=False)
 
-        # --- Méta-GO ---
+        # --- Meta-GO ---
         mat = meta_go["matrix"].copy()
         mmeta = meta_go["meta"]
         mat_out = mat.copy()
@@ -40,7 +40,7 @@ def build(path, meta_go, explore, provenance: dict, resume=None, pubs=None):
 
         # --- Exploration ---
         explore["pca"]["scores"].to_excel(xw, sheet_name="PCA_scores")
-        # loadings : top 50 contributeurs |PC1|
+        # loadings: top |PC1| contributors
         load = explore["pca"]["loadings"]
         if "PC1" in load.columns:
             load = load.reindex(load["PC1"].abs().sort_values(ascending=False).index)
@@ -51,8 +51,8 @@ def build(path, meta_go, explore, provenance: dict, resume=None, pubs=None):
             multi.to_excel(xw, sheet_name="PC_factor_multi", index=False)
         explore["correlation"].to_excel(xw, sheet_name="Sample_correlation")
 
-        # variance expliquée
+        # explained variance
         ve = explore["pca"]["var_exp"]
         pd.DataFrame({"PC": [f"PC{i+1}" for i in range(len(ve))],
-                      "var_expliquee_%": [round(float(v), 2) for v in ve]}).to_excel(
+                      "explained_variance_%": [round(float(v), 2) for v in ve]}).to_excel(
             xw, sheet_name="PCA_scree", index=False)
