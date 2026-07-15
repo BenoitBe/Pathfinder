@@ -1,0 +1,147 @@
+"""
+Axe B — Méta-comparaison au niveau GO.
+
+Construit une vision d'ensemble en croisant tous les contrastes sur leurs termes
+GO/pathway. Objet central : matrice `terme x contraste` de z-score signé, masquée
+par la significativité (NaN = non-significatif/non-testé, jamais 0 -> le 0 fausse
+le clustering).
+
+- Directionnalité croisée : sign(z) par contraste -> pattern up/down partagé.
+- Redondance : clustering des termes par distance de Jaccard sur les sets
+  d'accessions `intersection` (offline, sans télécharger l'ontologie). Collapse
+  les termes qui tapent les mêmes protéines et désigne un représentant.
+"""
+from __future__ import annotations
+import numpy as np
+import pandas as pd
+from scipy.cluster.hierarchy import linkage, fcluster
+from scipy.spatial.distance import squareform
+
+
+def build_matrix(go_long: pd.DataFrame, p_thr: float = 0.05):
+    """Matrice terme x contraste (z signé, masqué par p_thr) + méta par terme."""
+    df = go_long.copy()
+    df["sig"] = df["p_value"] < p_thr
+    df["cell"] = np.where(df["sig"], df["z"], np.nan)
+
+    # clé de terme unique = term_id si dispo sinon term_name+source
+    df["key"] = np.where(
+        df["term_id"].astype(str).str.len() > 0,
+        df["term_id"].astype(str),
+        df["term_name"].astype(str) + "|" + df["source"].astype(str),
+    )
+
+    matrix = df.pivot_table(index="key", columns="contrast", values="cell", aggfunc="mean")
+
+    meta = (df.sort_values("p_value")
+              .drop_duplicates("key")
+              .set_index("key")[["term_name", "term_id", "source"]])
+    # nombre de contrastes où le terme est significatif
+    meta["n_sig"] = matrix.notna().sum(axis=1)
+    meta = meta.loc[matrix.index]
+    return matrix, meta, df
+
+
+def directionality(matrix: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
+    """Pour chaque terme : contrastes up / down / mixte, et un motif compact."""
+    recs = []
+    for key, row in matrix.iterrows():
+        up = [c for c in matrix.columns if pd.notna(row[c]) and row[c] > 0]
+        dn = [c for c in matrix.columns if pd.notna(row[c]) and row[c] < 0]
+        if up and dn:
+            pattern = "mixte"
+        elif up:
+            pattern = "up partagé" if len(up) > 1 else "up spécifique"
+        elif dn:
+            pattern = "down partagé" if len(dn) > 1 else "down spécifique"
+        else:
+            pattern = "—"
+        recs.append({
+            "term_name": meta.loc[key, "term_name"],
+            "source": meta.loc[key, "source"],
+            "n_sig": int(meta.loc[key, "n_sig"]),
+            "pattern": pattern,
+            "up_in": ", ".join(up),
+            "down_in": ", ".join(dn),
+        })
+    out = pd.DataFrame(recs, index=matrix.index)
+    return out.sort_values(["n_sig", "pattern"], ascending=[False, True])
+
+
+def _jaccard_condensed(sets):
+    n = len(sets)
+    d = np.zeros(n * (n - 1) // 2)
+    k = 0
+    for i in range(n):
+        si = sets[i]
+        for j in range(i + 1, n):
+            sj = sets[j]
+            if not si and not sj:
+                dist = 1.0
+            else:
+                inter = len(si & sj)
+                union = len(si | sj)
+                dist = 1.0 - (inter / union if union else 0.0)
+            d[k] = dist
+            k += 1
+    return d
+
+
+def redundancy_clusters(go_long: pd.DataFrame, matrix: pd.DataFrame, meta: pd.DataFrame,
+                        jaccard_cut: float = 0.5):
+    """Regroupe les termes redondants (mêmes protéines) et désigne un représentant.
+
+    jaccard_cut : distance de coupe (0.5 -> termes partageant >50% de gènes fusionnés).
+    Ne considère que les termes significatifs dans >=1 contraste (index de `matrix`).
+    """
+    df = go_long.copy()
+    df["key"] = np.where(
+        df["term_id"].astype(str).str.len() > 0,
+        df["term_id"].astype(str),
+        df["term_name"].astype(str) + "|" + df["source"].astype(str),
+    )
+    # set d'accessions par terme = union des intersections sur tous les contrastes
+    gene_sets = {}
+    for key, grp in df.groupby("key"):
+        s = set()
+        for lst in grp["intersection"]:
+            s.update(lst)
+        gene_sets[key] = s
+
+    keys = list(matrix.index)
+    meta = meta.copy()
+    meta["redundancy_cluster"] = -1
+    meta["is_representative"] = True
+
+    sets = [gene_sets.get(k, set()) for k in keys]
+    if len(keys) >= 2 and any(sets):
+        dcond = _jaccard_condensed(sets)
+        Z = linkage(dcond, method="average")
+        clusters = fcluster(Z, t=jaccard_cut, criterion="distance")
+        meta.loc[keys, "redundancy_cluster"] = clusters
+        # représentant par cluster = plus grand |z| médian (terme le plus marqué)
+        strength = matrix.abs().mean(axis=1).fillna(0)
+        for cl in np.unique(clusters):
+            members = [k for k, c in zip(keys, clusters) if c == cl]
+            rep = max(members, key=lambda k: (strength.get(k, 0), meta.loc[k, "n_sig"]))
+            for k in members:
+                meta.loc[k, "is_representative"] = (k == rep)
+    return meta
+
+
+def run(go_long: pd.DataFrame, p_thr: float = 0.05, jaccard_cut: float = 0.5):
+    matrix, meta, df = build_matrix(go_long, p_thr)
+    meta = redundancy_clusters(go_long, matrix, meta, jaccard_cut)
+    direction = directionality(matrix, meta)
+    # sets d'accessions par terme (union des intersections sig sur les contrastes) — pour l'UMAP GO
+    sig = go_long[go_long["p_value"] < p_thr].copy()
+    sig["key"] = np.where(sig["term_id"].astype(str).str.len() > 0,
+                          sig["term_id"].astype(str),
+                          sig["term_name"].astype(str) + "|" + sig["source"].astype(str))
+    term_genes = {}
+    for key, grp in sig.groupby("key"):
+        s = set()
+        for lst in grp["intersection"]:
+            s.update(lst)
+        term_genes[key] = s
+    return {"matrix": matrix, "meta": meta, "directionality": direction, "term_genes": term_genes}
