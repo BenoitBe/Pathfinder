@@ -102,20 +102,38 @@ def _multifactor_section(explore):
 
 def _qc_section(explore, cond_map):
     corr = explore["correlation"]
+    zscored = bool(corr.attrs.get("zscored"))
     samples = list(corr.columns)
-    lines, outliers = [], []
+    vals = {}
     for s in samples:
         peers = [o for o in samples if o != s and cond_map.get(o) == cond_map.get(s)]
         if len(peers) >= 2:
-            r = float(np.mean([corr.loc[s, o] for o in peers]))
-            if r < 0.90:
-                outliers.append((s, cond_map.get(s), r))
+            vals[s] = float(np.mean([corr.loc[s, o] for o in peers]))
+    if not vals:
+        return ["Not enough replicates per condition to assess sample homogeneity."]
+
+    v = np.array(list(vals.values()))
+    med = float(np.median(v))
+    mad = float(np.median(np.abs(v - med))) * 1.4826
+    lines, outliers = [], []
+    for s, r in vals.items():
+        # robust rule (works on z-scored data, where absolute r is low by construction)
+        rel = mad > 1e-9 and r < med - 3 * mad
+        absolute = (not zscored) and r < 0.90
+        if rel or absolute:
+            outliers.append((s, cond_map.get(s), r))
     if outliers:
         for s, c, r in sorted(outliers, key=lambda t: t[2]):
-            lines.append(f"⚠ Sample {s} ({c}) correlates poorly with its replicates (mean r={r:.2f}) "
-                         "— check the run/preparation before interpreting.")
+            lines.append(f"⚠ Sample {s} ({c}) correlates poorly with its replicates "
+                         f"(mean r={r:.2f} vs median {med:.2f} across samples) — check the "
+                         "run/preparation before interpreting.")
     else:
-        lines.append("Within-condition correlation is homogeneous; no outlier sample detected.")
+        lines.append(f"Within-condition correlation is homogeneous (median mean r={med:.2f}); "
+                     "no outlier sample detected.")
+    if zscored:
+        lines.append("Correlations are computed on per-protein z-scores (no raw intensity matrix "
+                     "available): absolute values are low by construction, only relative "
+                     "differences between samples are informative.")
     return lines
 
 

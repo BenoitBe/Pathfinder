@@ -43,7 +43,31 @@ def _diverging(v, vmax):
 # --------------------------------------------------------------------------- #
 # Figures SVG                                                                   #
 # --------------------------------------------------------------------------- #
-def svg_meta_heatmap(matrix: pd.DataFrame, meta: pd.DataFrame, max_terms=40):
+def _colorbar(x, y, vmax, width=170, height=9, uid="cb"):
+    """Graduated z-score colour bar (blue -> grey -> red) + NaN swatch."""
+    s = []
+    stops = []
+    n = 24
+    for i in range(n + 1):
+        t = i / n
+        v = -vmax + t * 2 * vmax
+        stops.append(f"<stop offset='{t*100:.0f}%' stop-color='{_diverging(v, vmax)}'/>")
+    s.append(f"<defs><linearGradient id='{uid}' x1='0' y1='0' x2='1' y2='0'>{''.join(stops)}</linearGradient></defs>")
+    s.append(f"<rect x='{x}' y='{y}' width='{width}' height='{height}' fill='url(#{uid})' rx='2'/>")
+    s.append(f"<rect x='{x}' y='{y}' width='{width}' height='{height}' fill='none' stroke='{GRID}' rx='2'/>")
+    for i, lab in enumerate([-vmax, -vmax / 2, 0, vmax / 2, vmax]):
+        lx = x + width * i / 4
+        s.append(f"<line x1='{lx}' y1='{y+height}' x2='{lx}' y2='{y+height+3}' stroke='{MUT}'/>")
+        s.append(f"<text x='{lx}' y='{y+height+11}' fill='{MUT}' font-size='8' text-anchor='middle'>{lab:+.1f}</text>")
+    s.append(f"<text x='{x-6}' y='{y+height-1}' fill='{MUT}' font-size='8' text-anchor='end'>z</text>")
+    # NaN swatch
+    nx = x + width + 16
+    s.append(f"<rect x='{nx}' y='{y}' width='{height}' height='{height}' fill='#1c2128' stroke='{GRID}' rx='2'/>")
+    s.append(f"<text x='{nx+height+4}' y='{y+height-1}' fill='{MUT}' font-size='8'>not significant</text>")
+    return "".join(s)
+
+
+def svg_meta_heatmap(matrix: pd.DataFrame, meta: pd.DataFrame, max_terms=40, uid="cb"):
     if matrix.empty:
         return "<p class='mut'>No significant GO term.</p>"
     m = matrix.reindex(meta.sort_values("n_sig", ascending=False).index).head(max_terms)
@@ -53,7 +77,7 @@ def svg_meta_heatmap(matrix: pd.DataFrame, meta: pd.DataFrame, max_terms=40):
     cw, ch = 46, 20
     left, top = 360, 150
     W = left + len(contrasts) * cw + 30
-    H = top + len(m) * ch + 20
+    H = top + len(m) * ch + 42
     s = [f"<svg viewBox='0 0 {W} {H}' width='100%' style='max-width:{W}px'>"]
     for j, c in enumerate(contrasts):
         x = left + j * cw + cw / 2
@@ -69,9 +93,8 @@ def svg_meta_heatmap(matrix: pd.DataFrame, meta: pd.DataFrame, max_terms=40):
             x = left + j * cw
             tip = "" if pd.isna(v) else f"<title>{_esc(names[i])} — {_esc(c)} : z={v:.2f}</title>"
             s.append(f"<rect x='{x}' y='{y}' width='{cw-2}' height='{ch-2}' fill='{col}' rx='2'>{tip}</rect>")
-    # legend
-    ly = H - 6
-    s.append(f"<text x='{left}' y='{ly}' fill='{MUT}' font-size='10'>blue = down · red = up · grey = not sig.  (max |z|={vmax:.1f})</text>")
+    # graduated colour bar
+    s.append(_colorbar(left, H - 28, vmax, uid=uid))
     s.append("</svg>")
     return "".join(s)
 
@@ -297,7 +320,25 @@ def svg_corr(corr: pd.DataFrame):
     labels = list(corr.columns)
     n = len(labels); cell = min(28, max(10, int(560 / max(n, 1))))
     left, top = 130, 130
-    W = left + n * cell + 20; H = top + n * cell + 20
+    W = left + n * cell + 20; H = top + n * cell + 46
+    V = corr.values.astype(float)
+    off = V[~np.eye(n, dtype=bool)] if n > 1 else np.array([1.0])
+    off = off[np.isfinite(off)]
+    lo = float(np.nanmin(off)) if off.size else 0.0
+    hi = float(np.nanmax(off)) if off.size else 1.0
+    if hi - lo < 1e-6:
+        hi = lo + 1e-6
+    diverging = lo < 0 < hi
+    amp = max(abs(lo), abs(hi))
+
+    def col(v):
+        if not np.isfinite(v):
+            return "#1c2128"
+        if diverging:                       # blue (neg) -> grey -> red (pos)
+            return _diverging(v, amp)
+        t = max(0.0, min(1.0, (v - lo) / (hi - lo)))     # sequential green
+        return f"rgb({int(28 + t*20)},{int(45 + t*175)},{int(58 + t*40)})"
+
     s = [f"<svg viewBox='0 0 {W} {H}' width='100%' style='max-width:{W}px'>"]
     for i, ri in enumerate(labels):
         s.append(f"<text x='{left-6}' y='{top+i*cell+cell*0.7}' fill='{FG}' font-size='9' text-anchor='end'>{_esc(ri)}</text>")
@@ -305,13 +346,23 @@ def svg_corr(corr: pd.DataFrame):
         s.append(f"<text x='{x}' y='{top-6}' fill='{MUT}' font-size='9' text-anchor='end' transform='rotate(-50 {x} {top-6})'>{_esc(ri)}</text>")
     for i, ri in enumerate(labels):
         for j, cj in enumerate(labels):
-            v = float(corr.iloc[i, j])
-            t = max(0.0, min(1.0, (v - 0.7) / 0.3)) if v >= 0 else 0
-            g = int(40 + t * 180)
-            col = f"rgb(30,{g},60)"
-            s.append(f"<rect x='{left+j*cell}' y='{top+i*cell}' width='{cell-1}' height='{cell-1}' fill='{col}'>"
+            v = float(V[i, j])
+            fill = "#e6edf3" if i == j else col(v)
+            s.append(f"<rect x='{left+j*cell}' y='{top+i*cell}' width='{cell-1}' height='{cell-1}' fill='{fill}'>"
                      f"<title>{_esc(ri)} / {_esc(cj)} : r={v:.3f}</title></rect>")
-    s.append(f"<text x='{left}' y='{H-4}' fill='{MUT}' font-size='9'>Pearson r (log₂ LFQ), ordered by clustering</text>")
+    # graduated colour bar over the observed off-diagonal range
+    barw = 150
+    if diverging:
+        s.append(_colorbar(left, H - 30, amp, width=barw, uid="cbcorr"))
+    else:
+        stops = "".join(f"<stop offset='{k*100/20:.0f}%' stop-color='{col(lo + (hi-lo)*k/20)}'/>" for k in range(21))
+        s.append(f"<defs><linearGradient id='cbcorr' x1='0' y1='0' x2='1' y2='0'>{stops}</linearGradient></defs>")
+        s.append(f"<rect x='{left}' y='{H-30}' width='{barw}' height='9' fill='url(#cbcorr)' rx='2' stroke='{GRID}'/>")
+        for k, lab in enumerate([lo, (lo+hi)/2, hi]):
+            lx = left + barw * k / 2
+            s.append(f"<line x1='{lx}' y1='{H-21}' x2='{lx}' y2='{H-18}' stroke='{MUT}'/>")
+            s.append(f"<text x='{lx}' y='{H-10}' fill='{MUT}' font-size='8' text-anchor='middle'>{lab:.2f}</text>")
+        s.append(f"<text x='{left-6}' y='{H-22}' fill='{MUT}' font-size='8' text-anchor='end'>r</text>")
     s.append("</svg>")
     return "".join(s)
 
@@ -382,7 +433,7 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
             sub_m = matrix.loc[keys]
             sub_meta = meta.loc[keys]
             sub_dir = direction[direction["source"] == src].drop(columns=["source"], errors="ignore")
-            hm = svg_meta_heatmap(sub_m, sub_meta)
+            hm = svg_meta_heatmap(sub_m, sub_meta, uid=f"cb{re.sub(r'[^A-Za-z0-9]', '', str(src))}")
             dtbl = _table(sub_dir, max_rows=25)
             parts.append(f"<h3>{_esc(SRC_LABEL.get(src, src))} "
                          f"<span class='mut'>· {len(keys)} terms</span></h3>{hm}{dtbl}")
@@ -427,11 +478,18 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
     if multi is not None and not multi.empty:
         sig = multi[(multi["p_adj_BH"] < 0.10) | (multi["effect"] >= 0.14)]
         show = (sig if len(sig) else multi).sort_values(["effect"], ascending=False)
-        multi_block = ("<h3>Quel facteur porte quel axe ? <span class='mut'>· PC × facteurs du design</span></h3>"
+        multi_block = ("<h3>Which factor drives which axis? <span class='mut'>· PC × design factors</span></h3>"
                        + _table(show, max_rows=24)
                        + "<p class='mut'>Categorical: Kruskal-Wallis, effect = ε². Numeric (e.g. injection "
                          "order): Spearman, effect = |rho|. A technical factor tied to a high-variance "
                          "PC ⇒ batch effect / drift to correct.</p>")
+
+    corr_note = ("<p class='mut'>Pearson r on <b>per-protein z-scores</b> (no raw intensity matrix in "
+                 "the workbook): rows are centred, so absolute r values are low by construction "
+                 "(mean ≈ −1/(n−1)) — read the <b>relative</b> structure, not the magnitude. "
+                 "Replicates should be relatively redder/greener than unrelated samples.</p>"
+                 if explore["correlation"].attrs.get("zscored") else
+                 "<p class='mut'>Pearson r on log₂ intensities, ordered by hierarchical clustering.</p>")
 
     explore_html = (
         f"<div class='grid2'><div><h3>PCA — PC1 vs PC2</h3>{scatter}</div>"
@@ -440,7 +498,7 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
         f"<p class='mut'>High ε² + low p on a PC ⇒ that axis captures the biological factor; "
         f"on an unexpected PC, suspect a batch effect.</p>"
         f"{multi_block}"
-        f"<div class='grid2'><div><h3>Inter-sample correlation</h3>{corr}</div>"
+        f"<div class='grid2'><div><h3>Inter-sample correlation</h3>{corr}{corr_note}</div>"
         f"<div><h3>Top PC1 contributors</h3>{load_tbl}</div></div>"
         f"{umap_s_html}")
 

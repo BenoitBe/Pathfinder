@@ -140,8 +140,14 @@ def pc_factor_multi(scores_df, factors_df, max_pc=6):
         out["p_adj_BH"] = _bh(out["p_value"].values)
         out = out[["factor", "type", "PC", "test", "stat", "p_value", "p_adj_BH", "effect"]]
     return out
+
+
 def sample_correlation(comp: pd.DataFrame, sample_int_cols):
     X = comp[sample_int_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+    # detect per-protein z-scored data (row mean ~0, row sd ~1): correlations are then
+    # low by construction (rows sum to zero across samples) -> the scale must adapt.
+    rm = X.mean(axis=1); rs = X.std(axis=1)
+    zscored = bool((rm.abs().median() < 0.05) and (abs(rs.median() - 1.0) < 0.15))
     corr = X.corr(method="pearson")
     # hierarchical ordering
     try:
@@ -153,6 +159,7 @@ def sample_correlation(comp: pd.DataFrame, sample_int_cols):
         corr = corr.iloc[order, order]
     except Exception:
         pass
+    corr.attrs["zscored"] = zscored
     return corr
 
 
