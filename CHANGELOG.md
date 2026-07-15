@@ -14,9 +14,13 @@ First release.
   factors driving a high-variance PC are flagged as batch effects.
 - **Protein UMAP** — interactive, colourable by abundance, per-contrast LFC and
   GO term, with source / term-count selectors.
-- **Publications axis** (opt-in) — STRING PMID enrichment per contrast with a
-  dated cache snapshot.
+- **Publications axis** — STRING PMID enrichment per contrast with a dated cache
+  snapshot. The species is auto-detected in the workbook (Deimos `go_organism`)
+  and confirmed by an interactive prompt at launch; `--org` skips it, `--no-online`
+  disables the axis. Accepts 'hsapiens', 'Homo sapiens', 'human' or an NCBI taxid.
 - **Interpretive summary** — deterministic, exported to HTML, Excel and Markdown.
+- **Contrast clustering** on the GO signature (Pearson on shared terms, hierarchical
+  order) with a contrast x contrast heatmap; Meta-GO heatmaps ordered accordingly.
 - Graduated z-score colour bars under every Meta-GO heatmap, and a
   **Representatives only / All terms** switch collapsing redundant GO terms.
 - Adaptive inter-sample correlation scale with automatic detection of z-scored

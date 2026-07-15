@@ -123,10 +123,20 @@ def _qc_section(explore, cond_map):
         if rel or absolute:
             outliers.append((s, cond_map.get(s), r))
     if outliers:
-        for s, c, r in sorted(outliers, key=lambda t: t[2]):
-            lines.append(f"⚠ Sample {s} ({c}) correlates poorly with its replicates "
-                         f"(mean r={r:.2f} vs median {med:.2f} across samples) — check the "
-                         "run/preparation before interpreting.")
+        frac = len(outliers) / len(vals)
+        if frac > 0.5:
+            lines.append(f"⚠ {len(outliers)}/{len(vals)} samples correlate poorly with their "
+                         f"replicates (median mean r={med:.2f}) — this is a global pattern, not "
+                         "isolated outliers: check normalisation, imputation or the design mapping "
+                         "rather than individual runs.")
+        else:
+            for s, c, r in sorted(outliers, key=lambda t: t[2])[:5]:
+                lines.append(f"⚠ Sample {s} ({c}) correlates poorly with its replicates "
+                             f"(mean r={r:.2f} vs median {med:.2f} across samples) — check the "
+                             "run/preparation before interpreting.")
+            if len(outliers) > 5:
+                lines.append(f"⚠ {len(outliers) - 5} further sample(s) flagged — see the "
+                             "Sample_correlation sheet.")
     else:
         lines.append(f"Within-condition correlation is homogeneous (median mean r={med:.2f}); "
                      "no outlier sample detected.")
@@ -177,8 +187,21 @@ def _contrast_section(meta_go):
     matrix = meta_go["matrix"]
     if matrix.empty:
         return []
+    lines = []
+    cc = meta_go.get("contrast_corr")
+    if cc is not None and not cc.empty and cc.shape[0] >= 2:
+        off = cc.where(~np.eye(cc.shape[0], dtype=bool)).stack().dropna()
+        if len(off):
+            a, b = off.idxmax()
+            lines.append(f"Closest contrasts by GO signature: {a} and {b} (r={off.max():+.2f}) — "
+                         "they move the same functions in the same direction.")
+            na, nb = off.idxmin()
+            if off.min() < -0.3:
+                lines.append(f"Most opposed contrasts: {na} and {nb} (r={off.min():+.2f}) — "
+                             "shared functions regulated in opposite directions.")
     counts = matrix.notna().sum(axis=0).sort_values(ascending=False)
-    return [f"{c}: {int(n)} significantly enriched terms." for c, n in counts.items()]
+    lines += [f"{c}: {int(n)} significantly enriched terms." for c, n in counts.items()]
+    return lines
 
 
 def generate(stats, meta_go, explore, provenance):

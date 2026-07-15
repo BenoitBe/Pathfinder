@@ -20,15 +20,18 @@ contrasts, plus an automatic interpretive summary.
 | Unit        | Protein (LFQ)               | Precursor peptide           | Contrast × GO term, sample × PC         |
 | Statistics  | limma + DEqMS               | limma eBayes                | None — reads upstream results           |
 | Focus       | Differential analysis       | Peptide-level analysis      | Cross-contrast synthesis, design QC     |
-| Network     | Offline                     | Offline                     | Offline (Publications axis = opt-in)    |
+| Network     | Offline                     | Offline                     | Offline (Publications axis = optional)  |
 
 ---
 
 ## Features
 
 - **Meta-GO** — term × contrast matrix of signed z-scores, cross-directionality
-  (shared up/down vs opposite regulation), Jaccard redundancy grouping.
-  Split by source (BP / MF / CC / KEGG / Reactome).
+  (shared up/down vs opposite regulation), Jaccard redundancy grouping with a
+  **Non-redundant / All terms** switch. Split by source (BP / MF / CC / KEGG / Reactome).
+- **Contrast clustering** — contrasts correlated on their GO signature and ordered
+  hierarchically: which comparisons move the same functions the same way, which are
+  opposed. The Meta-GO heatmaps follow that order.
 - **Exploration** — PCA with scree, loadings, and **PC ↔ condition association**
   (Kruskal-Wallis + ε², BH-corrected); inter-sample correlation.
 - **Multi-factor design testing** — every design column (condition, batch,
@@ -36,8 +39,10 @@ contrasts, plus an automatic interpretive summary.
   numeric → Spearman. Technical factors driving a high-variance PC are flagged.
 - **Protein UMAP** — interactive, colourable by mean abundance, per-contrast LFC,
   and **GO term** (source and term-count selectors).
-- **Publications** *(online, opt-in)* — STRING **PMID enrichment** per contrast:
-  which papers are over-represented in the signature, with a dated cache snapshot.
+- **Publications** — STRING **PMID enrichment** per contrast: which papers are
+  over-represented in the signature, with a dated cache snapshot. The species is
+  detected in the workbook and confirmed interactively at launch (`--org` to skip
+  the prompt, `--no-online` to stay fully offline).
 - **Automatic interpretive summary** — design capture, batch suspicion, outlier
   samples, functional synthesis per source. Deterministic and reproducible.
 
@@ -97,9 +102,11 @@ python pathfinder.py --stats ProteomicAnalysis_Results.xlsx --go GO_Results.xlsx
 # With an experimental design (multi-factor supported)
 python pathfinder.py --design ExperimentalDesign.csv
 
-# Publications axis (online, opt-in) — needs network access and the species
-python pathfinder.py --online --org rnorvegicus     # or hsapiens, mmusculus… or an NCBI taxid
-python pathfinder.py --online --org 10116 --refresh # bypass the cache
+# Publications axis — Pathfinder detects the species in the workbook and asks to
+# confirm at launch (Enter to accept, 'n' to skip). To answer up-front:
+python pathfinder.py --org rnorvegicus     # or 'Rattus norvegicus', 'rat', or an NCBI taxid
+python pathfinder.py --org 10116 --refresh # bypass the STRING cache
+python pathfinder.py --no-online           # fully offline: no prompt, no query
 
 # Inspect what was detected, then exit
 python pathfinder.py --diagnose
@@ -115,7 +122,9 @@ python pathfinder.py --diagnose
 | `--outdir`                | Output directory                                            |
 | `--pthr`                  | p threshold masking the GO matrix (default 0.05)            |
 | `--jaccard`               | Cut distance for GO redundancy grouping (default 0.5)       |
-| `--online` / `--org` / `--refresh` | Publications axis (STRING PMID) + cache            |
+| `--org`                   | Species for the Publications axis (skips the prompt)        |
+| `--no-online`             | Fully offline: no species prompt, no STRING query           |
+| `--refresh`               | Bypass the STRING cache                                     |
 | `--no-umap`               | Disable UMAP views                                          |
 | `--diagnose`              | Report detected sheets/columns and group sizes              |
 | `--write-design-template` | Write a pre-filled design template                          |
@@ -159,8 +168,8 @@ pathfinder_output/
 **HTML tabs**: Summary · Overview · Meta-GO · Exploration · Protein UMAP · Publications
 
 **Excel sheets**: provenance · Summary · MetaGO_matrix · MetaGO_directionality ·
-PCA_scores · PCA_loadings · PC_factor_assoc · PC_factor_multi · Sample_correlation ·
-PCA_scree · Publications
+Contrast_similarity · PCA_scores · PCA_loadings · PC_factor_assoc · PC_factor_multi ·
+Sample_correlation · PCA_scree · Publications
 
 ---
 

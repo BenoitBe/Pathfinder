@@ -13,7 +13,7 @@ Outputs: pathfinder_report.html + pathfinder_synthesis.xlsx + pathfinder_summary
 Usage:
   python pathfinder.py [--stats FILE] [--go FILE] [--design FILE] [--outdir DIR]
                        [--pthr P] [--jaccard D] [--no-umap] [--diagnose]
-                       [--online --org hsapiens [--refresh]]
+                       [--org hsapiens | --no-online] [--refresh]
 """
 from __future__ import annotations
 import argparse
@@ -44,9 +44,11 @@ def main(argv=None):
     ap.add_argument("--no-umap", action="store_true")
     ap.add_argument("--design", default=None,
                     help="ExperimentalDesign (CSV/xlsx) mapping sample -> condition (+ extra factors)")
-    ap.add_argument("--org", default=None, help="gProfiler organism (hsapiens...) or NCBI taxid - required for --online")
-    ap.add_argument("--online", action="store_true",
-                    help="enable the Publications axis (STRING PMID) - needs network access and --org")
+    ap.add_argument("--org", default=None,
+                    help="species for the Publications axis: gProfiler organism (hsapiens...), "
+                         "'Homo sapiens', 'human', or an NCBI taxid. Skips the interactive prompt.")
+    ap.add_argument("--no-online", action="store_true",
+                    help="fully offline: no species prompt, no STRING query")
     ap.add_argument("--refresh", action="store_true", help="bypass the cache and re-issue online calls")
     ap.add_argument("--write-design-template", action="store_true",
                     help="write a pre-filled ExperimentalDesign_template.csv, then exit")
@@ -232,7 +234,9 @@ def main(argv=None):
         empty = pd.DataFrame(columns=["term_name", "term_id", "source", "n_sig",
                                       "redundancy_cluster", "is_representative"])
         go_res = {"matrix": pd.DataFrame(), "meta": empty,
-                  "directionality": pd.DataFrame(), "term_genes": {}}
+                  "directionality": pd.DataFrame(), "term_genes": {},
+                  "contrast_corr": pd.DataFrame(), "contrast_order": [],
+                  "contrast_shared": pd.DataFrame()}
         provenance["go_file"] = "absent - Meta-GO axis skipped"
 
     # ---- Exploration axis ----
@@ -249,21 +253,40 @@ def main(argv=None):
     explore = axis_explore.run(stats, do_umap=not args.no_umap, factors_df=factors_df)
 
     # ---- Species (taxid) + Publications axis (online, opt-in) ----
-    taxid, org, src = species_mod.resolve_species(org_arg=args.org)
-    provenance["species_taxid"] = f"{taxid} ({src})" if taxid else src
+    org_arg = args.org
+    excel_org = None
+    if not org_arg and not args.no_online:
+        excel_org = species_mod.detect_org_in_workbook(args.stats)
+        if excel_org:
+            print(f"[Pathfinder] species detected in workbook: {excel_org}")
+
+    taxid, org, src = species_mod.resolve_species(org_arg=org_arg)
+
+    if not taxid and not args.no_online:
+        answer = species_mod.prompt_species(default=excel_org)
+        if answer is None:                       # not a TTY -> use detection silently
+            taxid, org, src = species_mod.resolve_species(excel_org=excel_org)
+        elif answer:
+            taxid, org, src = species_mod.resolve_species(org_arg=answer)
+            if not taxid:
+                print(f"[Pathfinder] ⚠ organism '{answer}' not recognised — Publications axis skipped.")
+                src = f"unrecognised '{answer}'"
+        else:
+            src = "skipped by user"
+
+    provenance["species_taxid"] = f"{taxid} ({org or 'taxid'} · {src})" if taxid else src
 
     pubs = None
-    if args.online:
-        if not taxid:
-            print("[Pathfinder] ⚠ --online requested but taxid unknown: specify --org "
-                  "(hsapiens, mmusculus, rnorvegicus... or a numeric taxid).")
-        else:
-            print(f"[Pathfinder] Publications axis: querying STRING PMID (taxid {taxid})...")
-            pubs = axis_publications.run(stats, taxid, p_thr=args.pthr, refresh=args.refresh)
-            n = sum(len(v) for v in pubs["results"].values())
-            provenance["publications"] = f"STRING PMID · {len(pubs['results'])} contrasts · {n} PMIDs"
-            for c, info in pubs["provenance"].items():
-                provenance[f"pub[{c}]"] = info
+    run_online = bool(taxid) and not args.no_online
+    if run_online:
+        print(f"[Pathfinder] Publications axis: querying STRING PMID (taxid {taxid})...")
+        pubs = axis_publications.run(stats, taxid, p_thr=args.pthr, refresh=args.refresh)
+        n = sum(len(v) for v in pubs["results"].values())
+        if n == 0 and not pubs["results"]:
+            print("[Pathfinder] ⚠ no publication returned (network issue or no significant proteins).")
+        provenance["publications"] = f"STRING PMID · {len(pubs['results'])} contrasts · {n} PMIDs"
+        for c, info in pubs["provenance"].items():
+            provenance[f"pub[{c}]"] = info
 
     # ---- KPIs ----
     n_go_sig = int(go_res["matrix"].notna().sum().sum()) if not go_res["matrix"].empty else 0

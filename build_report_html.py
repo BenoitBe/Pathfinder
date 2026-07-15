@@ -316,6 +316,43 @@ def svg_scree(var_exp):
     return "".join(s)
 
 
+def svg_contrast_corr(corr: pd.DataFrame, shared: pd.DataFrame):
+    """contrast x contrast similarity heatmap (diverging, hierarchical order)."""
+    labels = list(corr.columns)
+    n = len(labels)
+    if n < 2:
+        return ""
+    cell = min(26, max(9, int(520 / n)))
+    lab_w = min(190, 8 + max(len(str(l)) for l in labels) * 5)
+    left, top = lab_w, lab_w
+    W = left + n * cell + 24
+    H = top + n * cell + 44
+    s = [f"<svg viewBox='0 0 {W} {H}' width='100%' style='max-width:{W}px'>"]
+    for i, li in enumerate(labels):
+        s.append(f"<text x='{left-6}' y='{top+i*cell+cell*0.72}' fill='{FG}' font-size='9' "
+                 f"text-anchor='end'>{_esc(li)}</text>")
+        x = left + i * cell + cell / 2
+        s.append(f"<text x='{x}' y='{top-6}' fill='{MUT}' font-size='9' text-anchor='start' "
+                 f"transform='rotate(-90 {x} {top-6})'>{_esc(li)}</text>")
+    for i, li in enumerate(labels):
+        for j, lj in enumerate(labels):
+            v = corr.iloc[i, j]
+            sh = int(shared.iloc[i, j]) if shared is not None else 0
+            if i == j:
+                fill = "#e6edf3"
+            elif pd.isna(v):
+                fill = "#1c2128"
+            else:
+                fill = _diverging(float(v), 1.0)
+            tip = (f"{_esc(li)} / {_esc(lj)} : "
+                   + ("r=n/a" if pd.isna(v) else f"r={float(v):+.2f}")
+                   + f" · {sh} shared terms")
+            s.append(f"<rect x='{left+j*cell}' y='{top+i*cell}' width='{cell-1}' height='{cell-1}' "
+                     f"fill='{fill}'><title>{tip}</title></rect>")
+    s.append(_colorbar(left, H - 28, 1.0, width=150, uid="cbctr"))
+    return "".join(s) + "</svg>"
+
+
 def svg_corr(corr: pd.DataFrame):
     labels = list(corr.columns)
     n = len(labels); cell = min(28, max(10, int(560 / max(n, 1))))
@@ -425,6 +462,10 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
         metago = "<p class='mut'>GO enrichment not provided — functional synthesis unavailable.</p>"
     else:
         has_rep = "is_representative" in meta.columns and bool(meta["is_representative"].any())
+        # reorder contrasts by GO-signature similarity (falls back to given order)
+        corder = [c for c in (meta_go.get("contrast_order") or []) if c in matrix.columns]
+        if len(corder) == matrix.shape[1]:
+            matrix = matrix[corder]
         n_clusters = meta["redundancy_cluster"].nunique() if (meta["redundancy_cluster"] >= 0).any() else 0
         n_rep = int(meta["is_representative"].sum()) if has_rep else matrix.shape[0]
         ctl = ("<div class='goctl'>"
@@ -433,11 +474,32 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
                "<option value='all'>All terms</option></select></label>"
                f"<span class='mut'>{n_rep} non-redundant · {matrix.shape[0]} terms total · "
                f"{n_clusters} redundancy groups (Jaccard)</span></div>") if has_rep else ""
-        parts = [ctl,
-                 f"<p class='mut'>{matrix.shape[0]} significant terms across {matrix.shape[1]} "
-                 f"contrast(s). Red = up, blue = down, grey = not significant. "
-                 f"Redundant terms (hitting the same proteins) are collapsed into a single "
-                 f"non-redundant entry; switch above to list every term.</p>"]
+        parts = [ctl]
+        ccorr = meta_go.get("contrast_corr")
+        if ccorr is not None and not ccorr.empty and ccorr.shape[0] >= 2:
+            cc = svg_contrast_corr(ccorr, meta_go.get("contrast_shared"))
+            if cc:
+                off = ccorr.where(~np.eye(ccorr.shape[0], dtype=bool)).stack().dropna()
+                extra = ""
+                if len(off):
+                    top_pair = off.idxmax(); top_v = off.max()
+                    neg = off.min(); neg_pair = off.idxmin()
+                    extra = (f" Most similar: <b>{_esc(top_pair[0])}</b> ↔ <b>{_esc(top_pair[1])}</b> "
+                             f"(r={top_v:+.2f}).")
+                    if neg < -0.3:
+                        extra += (f" Most opposed: <b>{_esc(neg_pair[0])}</b> ↔ "
+                                  f"<b>{_esc(neg_pair[1])}</b> (r={neg:+.2f}).")
+                parts.append(
+                    "<h3>Contrast clustering <span class='mut'>· by GO signature</span></h3>" + cc +
+                    "<p class='mut'>Pearson correlation between the signed z-score profiles of two "
+                    "contrasts, over the terms significant in both. Red = they move the same functions "
+                    "the same way; blue = opposite directions; grey = too few shared terms to compare. "
+                    "Rows/columns — and the heatmaps below — are ordered by this clustering." + extra +
+                    "</p>")
+        parts.append(f"<p class='mut'>{matrix.shape[0]} significant terms across {matrix.shape[1]} "
+                     f"contrast(s). Red = up, blue = down, grey = not significant. "
+                     f"Redundant terms (hitting the same proteins) are collapsed into a single "
+                     f"non-redundant entry; switch above to list every term.</p>")
         for src in _sources_present(meta):
             keys = meta.index[meta["source"] == src]
             sid = re.sub(r"[^A-Za-z0-9]", "", str(src))

@@ -37,6 +37,9 @@ def build(path, meta_go, explore, provenance: dict, resume=None, pubs=None):
         if "source" in direction.columns:
             direction = direction.sort_values(["source", "n_sig"], ascending=[True, False])
         direction.to_excel(xw, sheet_name="MetaGO_directionality")
+        cc = meta_go.get("contrast_corr")
+        if cc is not None and not cc.empty:
+            cc.to_excel(xw, sheet_name="Contrast_similarity")
 
         # --- Exploration ---
         explore["pca"]["scores"].to_excel(xw, sheet_name="PCA_scores")

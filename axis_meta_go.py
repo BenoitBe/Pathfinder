@@ -13,7 +13,7 @@ Core object: a `term x contrast` matrix of signed z-scores, masked by significan
 from __future__ import annotations
 import numpy as np
 import pandas as pd
-from scipy.cluster.hierarchy import linkage, fcluster
+from scipy.cluster.hierarchy import linkage, fcluster, leaves_list
 from scipy.spatial.distance import squareform
 
 
@@ -128,6 +128,45 @@ def redundancy_clusters(go_long: pd.DataFrame, matrix: pd.DataFrame, meta: pd.Da
     return meta
 
 
+def contrast_similarity(matrix: pd.DataFrame, min_shared: int = 3):
+    """Cluster contrasts by their GO signature.
+
+    Similarity = Pearson correlation between the signed z-score profiles of two
+    contrasts, computed on the terms significant in BOTH (pairwise-complete). A
+    high positive value means the two contrasts move the same functions the same
+    way; a negative one means they move them in opposite directions.
+
+    Returns (corr, order, n_shared) where `order` is the hierarchical leaf order.
+    NaN where fewer than `min_shared` terms are shared (not comparable).
+    """
+    cols = list(matrix.columns)
+    n = len(cols)
+    corr = pd.DataFrame(np.nan, index=cols, columns=cols, dtype=float)
+    shared = pd.DataFrame(0, index=cols, columns=cols, dtype=int)
+    for i, a in enumerate(cols):
+        corr.loc[a, a] = 1.0
+        shared.loc[a, a] = int(matrix[a].notna().sum())
+        for b in cols[i + 1:]:
+            both = matrix[[a, b]].dropna()
+            shared.loc[a, b] = shared.loc[b, a] = len(both)
+            if len(both) >= min_shared and both[a].std() > 0 and both[b].std() > 0:
+                r = float(both[a].corr(both[b]))
+                corr.loc[a, b] = corr.loc[b, a] = r
+
+    order = list(range(n))
+    if n >= 3:
+        try:
+            d = 1.0 - corr.fillna(0.0).values          # NaN -> no similarity, for ordering only
+            np.fill_diagonal(d, 0.0)
+            d = (d + d.T) / 2.0
+            Z = linkage(squareform(np.clip(d, 0, 2), checks=False), method="average")
+            order = list(leaves_list(Z))
+        except Exception:
+            pass
+    labels = [cols[i] for i in order]
+    return corr.loc[labels, labels], labels, shared.loc[labels, labels]
+
+
 def run(go_long: pd.DataFrame, p_thr: float = 0.05, jaccard_cut: float = 0.5):
     matrix, meta, df = build_matrix(go_long, p_thr)
     meta = redundancy_clusters(go_long, matrix, meta, jaccard_cut)
@@ -143,4 +182,8 @@ def run(go_long: pd.DataFrame, p_thr: float = 0.05, jaccard_cut: float = 0.5):
         for lst in grp["intersection"]:
             s.update(lst)
         term_genes[key] = s
-    return {"matrix": matrix, "meta": meta, "directionality": direction, "term_genes": term_genes}
+    # contrast clustering on the GO signature
+    ccorr, corder, cshared = contrast_similarity(matrix)
+    return {"matrix": matrix, "meta": meta, "directionality": direction,
+            "term_genes": term_genes, "contrast_corr": ccorr,
+            "contrast_order": corder, "contrast_shared": cshared}
