@@ -1,12 +1,14 @@
-# Cœur (obligatoire)
+# Requires Python 3.9+
+
+# Core (required)
 pandas>=1.5
 numpy>=1.23
 scipy>=1.9
 scikit-learn>=1.1
 openpyxl>=3.1
 
-# Optionnel — UMAP (axe Exploration : UMAP échantillons/protéines)
+# Optional - UMAP (Exploration axis: sample/protein UMAP)
 umap-learn>=0.5
 
-# Optionnel — axe Publications (online, STRING PMID)
+# Optional - Publications axis (online, STRING PMID)
 requests>=2.28

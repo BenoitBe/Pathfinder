@@ -141,25 +141,35 @@ def _go_section(meta_go):
     matrix, meta, direction = meta_go["matrix"], meta_go["meta"], meta_go["directionality"]
     if matrix.empty:
         return ["GO enrichment not provided — functional synthesis unavailable."]
-    lines = [f"{matrix.shape[0]} significant terms across {matrix.shape[1]} contrast(s), by source:"]
+    has_rep = "is_representative" in meta.columns and bool(meta["is_representative"].any())
+    n_rep = int(meta["is_representative"].sum()) if has_rep else matrix.shape[0]
+    lines = [f"{matrix.shape[0]} significant terms across {matrix.shape[1]} contrast(s)"
+             + (f", collapsing to {n_rep} non-redundant terms" if has_rep and n_rep < matrix.shape[0] else "")
+             + ", by source:"]
     for src in _sources_present(meta):
         keys = meta.index[meta["source"] == src]
-        d = direction[direction["source"] == src] if "source" in direction.columns else direction.loc[keys]
+        sub = meta.loc[keys]
+        rep_keys = keys[sub["is_representative"]] if has_rep else keys
+        d = direction.loc[rep_keys]
         vc = d["pattern"].value_counts().to_dict()
         shared = vc.get("shared up", 0) + vc.get("shared down", 0)
         mixed = vc.get("mixed", 0)
-        rec = meta.loc[keys].sort_values("n_sig", ascending=False)
+        rec = meta.loc[rep_keys].sort_values("n_sig", ascending=False)
         dom = (f" — top: {rec.iloc[0]['term_name']} ({int(rec.iloc[0]['n_sig'])} contrasts)"
                if len(rec) else "")
-        lines.append(f"{SRC_LABEL.get(src, src)}: {len(keys)} terms "
+        count = f"{len(rep_keys)}" + (f"/{len(keys)}" if has_rep and len(rep_keys) < len(keys) else "")
+        lines.append(f"{SRC_LABEL.get(src, src)}: {count} non-redundant terms "
                      f"({shared} shared, {mixed} with opposite direction){dom}.")
-    mx = direction[direction["pattern"] == "mixed"].head(3)
+    reps = meta.index[meta["is_representative"]] if has_rep else meta.index
+    mx = direction.loc[reps]
+    mx = mx[mx["pattern"] == "mixed"].head(3)
     if len(mx):
         lines.append("Opposite regulation depending on contrast (worth investigating): "
                      + "; ".join(f"{r.term_name} [{r.source}]" for _, r in mx.iterrows()) + ".")
     if (meta["redundancy_cluster"] >= 0).any():
         nc = meta["redundancy_cluster"].nunique()
-        lines.append(f"After redundancy grouping: {nc} functional groups.")
+        lines.append(f"After redundancy grouping: {nc} functional groups "
+                     "(terms hitting the same proteins are collapsed onto one representative).")
     return lines
 
 

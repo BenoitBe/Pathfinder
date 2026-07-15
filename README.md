@@ -68,6 +68,8 @@ python pathfinder.py --write-design-template
 
 ## Installation
 
+Requires **Python 3.9+**.
+
 ```
 pip install -r requirements.txt
 ```

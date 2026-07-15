@@ -17,6 +17,10 @@ First release.
 - **Publications axis** (opt-in) — STRING PMID enrichment per contrast with a
   dated cache snapshot.
 - **Interpretive summary** — deterministic, exported to HTML, Excel and Markdown.
+- Graduated z-score colour bars under every Meta-GO heatmap, and a
+  **Representatives only / All terms** switch collapsing redundant GO terms.
+- Adaptive inter-sample correlation scale with automatic detection of z-scored
+  input (absolute r is low by construction) and a robust outlier rule.
 - Self-contained HTML report and multi-sheet synthesis workbook.
 - Content-based detection of input workbooks and columns; experimental design
   read by name with positional fallback; design template generator.

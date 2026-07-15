@@ -419,24 +419,54 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
     prov_tbl = _table(pd.DataFrame(list(provenance.items()), columns=["key", "value"]), max_rows=30)
     overview = f"<div class='cards'>{kcards}</div><h3>Provenance</h3>{prov_tbl}"
 
-    # Meta-GO — split by source
+    # Meta-GO — split by source, with a representatives / all-terms switch
     matrix, meta, direction = meta_go["matrix"], meta_go["meta"], meta_go["directionality"]
     if matrix.empty:
         metago = "<p class='mut'>GO enrichment not provided — functional synthesis unavailable.</p>"
     else:
+        has_rep = "is_representative" in meta.columns and bool(meta["is_representative"].any())
         n_clusters = meta["redundancy_cluster"].nunique() if (meta["redundancy_cluster"] >= 0).any() else 0
-        parts = [f"<p class='mut'>{matrix.shape[0]} significant terms across {matrix.shape[1]} "
-                 f"contrast(s) · {n_clusters} redundancy groups (Jaccard). "
-                 f"Red = up, blue = down, grey = not significant.</p>"]
+        n_rep = int(meta["is_representative"].sum()) if has_rep else matrix.shape[0]
+        ctl = ("<div class='goctl'>"
+               "<label>Terms shown <select id='go_view'>"
+               "<option value='rep' selected>Non-redundant</option>"
+               "<option value='all'>All terms</option></select></label>"
+               f"<span class='mut'>{n_rep} non-redundant · {matrix.shape[0]} terms total · "
+               f"{n_clusters} redundancy groups (Jaccard)</span></div>") if has_rep else ""
+        parts = [ctl,
+                 f"<p class='mut'>{matrix.shape[0]} significant terms across {matrix.shape[1]} "
+                 f"contrast(s). Red = up, blue = down, grey = not significant. "
+                 f"Redundant terms (hitting the same proteins) are collapsed into a single "
+                 f"non-redundant entry; switch above to list every term.</p>"]
         for src in _sources_present(meta):
             keys = meta.index[meta["source"] == src]
-            sub_m = matrix.loc[keys]
-            sub_meta = meta.loc[keys]
-            sub_dir = direction[direction["source"] == src].drop(columns=["source"], errors="ignore")
-            hm = svg_meta_heatmap(sub_m, sub_meta, uid=f"cb{re.sub(r'[^A-Za-z0-9]', '', str(src))}")
-            dtbl = _table(sub_dir, max_rows=25)
-            parts.append(f"<h3>{_esc(SRC_LABEL.get(src, src))} "
-                         f"<span class='mut'>· {len(keys)} terms</span></h3>{hm}{dtbl}")
+            sid = re.sub(r"[^A-Za-z0-9]", "", str(src))
+            sub_meta_all = meta.loc[keys]
+            rep_keys = keys[sub_meta_all["is_representative"]] if has_rep else keys
+            blocks = []
+            for view, kk in (("rep", rep_keys), ("all", keys)):
+                if has_rep is False and view == "rep":
+                    continue
+                hide = "" if view == "rep" else " style='display:none'"
+                if len(kk) == 0:
+                    blocks.append(f"<div class='hm-{view}'{hide}>"
+                                  f"<p class='mut'>No term in this view.</p></div>")
+                    continue
+                hm = svg_meta_heatmap(matrix.loc[kk], meta.loc[kk], uid=f"cb{sid}{view}")
+                dt = direction.loc[kk].drop(columns=["source"], errors="ignore")
+                tbl = _table(dt, max_rows=25)
+                blocks.append(f"<div class='hm-{view}'{hide}>{hm}{tbl}</div>")
+            label_rep = f" <span class='mut'>· {len(rep_keys)} non-redundant / {len(keys)} terms</span>" \
+                if has_rep else f" <span class='mut'>· {len(keys)} terms</span>"
+            parts.append(f"<h3>{_esc(SRC_LABEL.get(src, src))}{label_rep}</h3>" + "".join(blocks))
+        if has_rep:
+            parts.append("""<script>
+(function(){var sel=document.getElementById('go_view');if(!sel)return;
+ sel.addEventListener('change',function(){var rep=sel.value==='rep';
+  document.querySelectorAll('.hm-rep').forEach(function(e){e.style.display=rep?'block':'none';});
+  document.querySelectorAll('.hm-all').forEach(function(e){e.style.display=rep?'none':'block';});});
+})();
+</script>""")
         metago = "".join(parts)
 
     # Exploration
