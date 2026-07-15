@@ -1,0 +1,140 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 240" width="200" height="240" role="img" aria-label="Pathfinder">
+  <defs>
+    <radialGradient id="sky" cx="50%" cy="42%" r="80%">
+      <stop offset="0%" stop-color="#0e1524"/>
+      <stop offset="100%" stop-color="#05070f"/>
+    </radialGradient>
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#b0603a"/>
+      <stop offset="60%" stop-color="#8a4529"/>
+      <stop offset="100%" stop-color="#4e2717"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f0cb84"/>
+      <stop offset="45%" stop-color="#c8984a"/>
+      <stop offset="100%" stop-color="#8a5f26"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#243149"/>
+      <stop offset="55%" stop-color="#33456a"/>
+      <stop offset="100%" stop-color="#1b2438"/>
+    </linearGradient>
+    <linearGradient id="haze" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#b4786e" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#b4786e" stop-opacity="0.45"/>
+    </linearGradient>
+    <clipPath id="card"><rect x="2" y="2" width="196" height="236" rx="16"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#card)">
+    <rect x="0" y="0" width="200" height="240" fill="url(#sky)"/>
+
+    <!-- stars -->
+    <g fill="#9fb6d4">
+      <circle cx="24" cy="38" r="0.7" opacity=".8"/><circle cx="58" cy="26" r="0.5" opacity=".6"/>
+      <circle cx="92" cy="44" r="0.6" opacity=".7"/><circle cx="128" cy="30" r="0.5" opacity=".5"/>
+      <circle cx="162" cy="48" r="0.7" opacity=".8"/><circle cx="176" cy="92" r="0.5" opacity=".6"/>
+      <circle cx="18" cy="104" r="0.6" opacity=".7"/><circle cx="46" cy="120" r="0.5" opacity=".5"/>
+      <circle cx="150" cy="112" r="0.6" opacity=".6"/><circle cx="112" cy="96" r="0.5" opacity=".5"/>
+      <circle cx="70" cy="72" r="0.5" opacity=".5"/><circle cx="184" cy="66" r="0.6" opacity=".7"/>
+      <circle cx="34" cy="76" r="0.5" opacity=".45"/><circle cx="138" cy="70" r="0.5" opacity=".5"/>
+    </g>
+
+    <!-- spectrum ticks (top) -->
+    <g stroke="#2f6d94" stroke-width="0.9">
+      <path d="M22 34v-9M28 34v-5M34 34v-13M40 34v-6M46 34v-11M52 34v-4M58 34v-14M64 34v-7M70 34v-10
+               M76 34v-5M82 34v-12M88 34v-6M94 34v-9M100 34v-14M106 34v-5M112 34v-11M118 34v-7
+               M124 34v-13M130 34v-4M136 34v-10M142 34v-6M148 34v-12M154 34v-5M160 34v-9M166 34v-13M172 34v-6"/>
+    </g>
+    <g stroke="#7fd4ff" stroke-width="0.9">
+      <path d="M34 34v-13M58 34v-14M100 34v-14M124 34v-13M166 34v-13"/>
+    </g>
+    <g stroke="#2f6d94" stroke-width="0.8" opacity=".75">
+      <path d="M22 38v4M34 38v6M46 38v3M58 38v5M70 38v3M82 38v6M94 38v4M106 38v3M118 38v5M130 38v3M142 38v6M154 38v4M166 38v5"/>
+    </g>
+
+    <!-- ground -->
+    <path d="M-4 148 Q100 118 204 148 L204 244 L-4 244 Z" fill="url(#ground)"/>
+    <path d="M-4 148 Q100 118 204 148 L204 168 L-4 168 Z" fill="url(#haze)"/>
+    <!-- ground grain -->
+    <g fill="#c9764a" opacity=".22">
+      <circle cx="30" cy="168" r="1.1"/><circle cx="62" cy="182" r="0.9"/><circle cx="96" cy="160" r="1"/>
+      <circle cx="132" cy="176" r="1"/><circle cx="168" cy="164" r="0.9"/><circle cx="48" cy="198" r="1"/>
+      <circle cx="112" cy="196" r="0.9"/><circle cx="152" cy="192" r="1"/><circle cx="82" cy="172" r="0.8"/>
+    </g>
+    <g fill="#3d1d11" opacity=".28">
+      <circle cx="44" cy="176" r="1"/><circle cx="78" cy="190" r="0.9"/><circle cx="120" cy="166" r="0.8"/>
+      <circle cx="158" cy="182" r="1"/><circle cx="24" cy="188" r="0.9"/><circle cx="136" cy="200" r="0.9"/>
+    </g>
+
+    <!-- rover shadow -->
+    <ellipse cx="100" cy="147" rx="40" ry="4.5" fill="#000" opacity=".38"/>
+
+    <!-- rover -->
+    <g>
+      <!-- antenna -->
+      <line x1="82" y1="114" x2="80" y2="86" stroke="#aab0b8" stroke-width="1.4"/>
+      <circle cx="80" cy="85" r="2.4" fill="#dfe3e8"/>
+      <!-- solar panel -->
+      <polygon points="69,109 135,104 133,111 67,116" fill="url(#panel)"/>
+      <polygon points="67,116 133,111 133,113.5 67,118.5" fill="#161d2e"/>
+      <g stroke="#151c2b" stroke-width="0.6">
+        <path d="M78,108.4 L76,115.3M87,107.7 L85,114.6M96,107 L94,113.9M105,106.4 L103,113.3M114,105.7 L112,112.6M123,105 L121,111.9"/>
+      </g>
+      <line x1="69" y1="112.5" x2="135" y2="107.5" stroke="#151c2b" stroke-width="0.6"/>
+      <line x1="80" y1="111" x2="124" y2="107" stroke="#6e90b8" stroke-width="0.8" opacity=".85"/>
+      <!-- body -->
+      <polygon points="75,114 127,114 123,132 79,132" fill="url(#gold)"/>
+      <line x1="75" y1="114" x2="127" y2="114" stroke="#f4d79b" stroke-width="1"/>
+      <line x1="79" y1="132" x2="123" y2="132" stroke="#7a5322" stroke-width="1"/>
+      <g stroke="#e6c47e" stroke-width="0.7" opacity=".45">
+        <path d="M87,115 L85,131M99,115 L97,131M111,115 L109,131"/>
+      </g>
+      <!-- rocker-bogie -->
+      <g stroke="#aab0b8" stroke-width="2" stroke-linecap="round">
+        <path d="M75,140 L104,120M101,140 L104,120M127,140 L104,120M101,140 L127,140"/>
+      </g>
+      <!-- wheels -->
+      <g>
+        <g transform="translate(75,140)">
+          <circle r="11" fill="#42424a" stroke="#1c1c22" stroke-width="1"/>
+          <g stroke="#1c1c22" stroke-width="1.1">
+            <path d="M0,-11 v3M7.8,-7.8 l2.1,2.1M11,0 h-3M7.8,7.8 l2.1,-2.1M0,11 v-3M-7.8,7.8 l-2.1,-2.1M-11,0 h3M-7.8,-7.8 l-2.1,2.1"/>
+          </g>
+          <circle r="3.2" fill="#7c7c86"/>
+        </g>
+        <g transform="translate(101,140)">
+          <circle r="11" fill="#42424a" stroke="#1c1c22" stroke-width="1"/>
+          <g stroke="#1c1c22" stroke-width="1.1">
+            <path d="M0,-11 v3M7.8,-7.8 l2.1,2.1M11,0 h-3M7.8,7.8 l2.1,-2.1M0,11 v-3M-7.8,7.8 l-2.1,-2.1M-11,0 h3M-7.8,-7.8 l-2.1,2.1"/>
+          </g>
+          <circle r="3.2" fill="#7c7c86"/>
+        </g>
+        <g transform="translate(127,140)">
+          <circle r="11" fill="#42424a" stroke="#1c1c22" stroke-width="1"/>
+          <g stroke="#1c1c22" stroke-width="1.1">
+            <path d="M0,-11 v3M7.8,-7.8 l2.1,2.1M11,0 h-3M7.8,7.8 l2.1,-2.1M0,11 v-3M-7.8,7.8 l-2.1,-2.1M-11,0 h3M-7.8,-7.8 l-2.1,2.1"/>
+          </g>
+          <circle r="3.2" fill="#7c7c86"/>
+        </g>
+      </g>
+    </g>
+
+    <!-- spectrum ticks (bottom) -->
+    <g stroke="#2f6d94" stroke-width="0.9" opacity=".9">
+      <path d="M22 208v9M28 208v5M34 208v13M40 208v6M46 208v11M52 208v4M58 208v14M64 208v7M70 208v10
+               M76 208v5M82 208v12M88 208v6M94 208v9M100 208v14M106 208v5M112 208v11M118 208v7
+               M124 208v13M130 208v4M136 208v10M142 208v6M148 208v12M154 208v5M160 208v9M166 208v13M172 208v6"/>
+    </g>
+    <g stroke="#7fd4ff" stroke-width="0.9">
+      <path d="M58 208v14M100 208v14M124 208v13"/>
+    </g>
+
+    <!-- subtitle + title -->
+    <text x="100" y="206" text-anchor="middle" fill="#8b949e" font-family="Georgia, 'Times New Roman', serif"
+          font-size="4.6" letter-spacing="1.6">· MARS · PATHFINDER · SOJOURNER ·</text>
+    <text x="100" y="230" text-anchor="middle" fill="#c49c6e" font-family="Georgia, 'Times New Roman', serif"
+          font-size="19" letter-spacing="3.4">PATHFINDER</text>
+  </g>
+  <rect x="2" y="2" width="196" height="236" rx="16" fill="none" stroke="#3c6082" stroke-opacity=".7"/>
+</svg>

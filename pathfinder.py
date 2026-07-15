@@ -28,7 +28,8 @@ import axis_explore
 import axis_publications
 import summary as summary_mod
 import species as species_mod
-from report import build_xlsx, build_html
+import build_report_html as build_html
+import build_report_xlsx as build_xlsx
 
 
 def main(argv=None):
@@ -301,20 +302,21 @@ def main(argv=None):
 
     xlsx_path = _safe_write(lambda p: build_xlsx.build(p, go_res, explore, provenance, resume, pubs),
                             os.path.join(args.outdir, "pathfinder_synthese.xlsx"), "xlsx")
-    # branding (icône embarquée dans le header, style Deimos)
+    # branding : mark SVG inline (fallback PNG base64)
     import base64
     _here = os.path.dirname(os.path.abspath(__file__))
-    icon_b64 = None
-    _dirs = [_here, os.path.join(_here, "assets"), ".", os.path.join(".", "assets")]
-    for _d in _dirs:
-        for _nm in ("pathfinder_icon_128.png", "pathfinder_icon_256.png", "pathfinder_icon_200.png"):
-            _p = os.path.join(_d, _nm)
+    icon_svg, icon_b64 = None, None
+    _svg = os.path.join(_here, "pathfinder_mark.svg")
+    if os.path.exists(_svg):
+        icon_svg = open(_svg, encoding="utf-8").read()
+        icon_svg = icon_svg[icon_svg.index("<svg"):]
+    else:
+        for _nm in ("pathfinder_icon_preview.png", "pathfinder_icon_128.png"):
+            _p = os.path.join(_here, _nm)
             if os.path.exists(_p):
                 icon_b64 = base64.b64encode(open(_p, "rb").read()).decode()
                 break
-        if icon_b64:
-            break
-    branding = {"icon_b64": icon_b64}
+    branding = {"icon_b64": icon_b64, "icon_svg": icon_svg}
 
     html_path = _safe_write(lambda p: build_html.build(p, go_res, explore, provenance, kpis, resume, branding, pubs),
                             os.path.join(args.outdir, "pathfinder_report.html"), "html")

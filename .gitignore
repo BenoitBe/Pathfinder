@@ -1,12 +1,13 @@
-# Sorties Pathfinder
+# Pathfinder outputs
 pathfinder_report*.html
 pathfinder_synthese*.xlsx
 pathfinder_resume*.md
+ExperimentalDesign_template.csv
 out*/
-examples/*.xlsx
-examples/*.csv
+example_data/*.xlsx
+example_data/*.csv
 
-# Cache online
+# Online cache
 .pathfinder_cache/
 
 # Python
@@ -15,9 +16,8 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
-.ipynb_checkpoints/
 
-# OS / éditeurs
+# OS / editors
 .DS_Store
 Thumbs.db
 .vscode/
