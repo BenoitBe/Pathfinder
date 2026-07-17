@@ -316,7 +316,40 @@ def svg_scree(var_exp):
     return "".join(s)
 
 
-def svg_contrast_corr(corr: pd.DataFrame, shared: pd.DataFrame, relation=None):
+def svg_protein_heatmap(matrix: pd.DataFrame, meta: pd.DataFrame, uid="cbprot"):
+    """protein x contrast heatmap of significant log2 fold-changes."""
+    if matrix.empty:
+        return "<p class='mut'>No significant protein.</p>"
+    contrasts = list(matrix.columns)
+    vmax = float(np.nanmax(np.abs(matrix.values))) or 1.0
+    cw, ch = 54, 22
+    left, top = 260, 150
+    W = left + len(contrasts) * cw + 30
+    H = top + len(matrix) * ch + 42
+    s = [f"<svg viewBox='0 0 {W} {H}' width='{W}' height='{H}' style='max-width:100%;height:auto'>"]
+    for j, c in enumerate(contrasts):
+        x = left + j * cw + cw / 2
+        s.append(f"<text x='{x}' y='{top-8}' fill='{MUT}' font-size='9' text-anchor='start' "
+                 f"transform='rotate(-90 {x} {top-8})'>{_esc(c)}</text>")
+    for i, key in enumerate(matrix.index):
+        y = top + i * ch
+        g = meta.loc[key, "gene"] if "gene" in meta.columns else None
+        label = str(g) if isinstance(g, str) and g not in ("", "nan") else str(key)
+        n = int(meta.loc[key, "n_sig"]) if "n_sig" in meta.columns else 0
+        s.append(f"<text x='{left-8}' y='{y+ch*0.7}' fill='{FG}' font-size='10' "
+                 f"text-anchor='end'>{_esc(label[:30])} <tspan fill='{MUT}'>({n})</tspan></text>")
+        for j, c in enumerate(contrasts):
+            v = matrix.iloc[i, j]
+            col = _diverging(v if pd.notna(v) else None, vmax)
+            tip = "" if pd.isna(v) else f"<title>{_esc(label)} — {_esc(c)} : LFC={v:+.2f}</title>"
+            s.append(f"<rect x='{left+j*cw}' y='{y}' width='{cw-2}' height='{ch-2}' "
+                     f"fill='{col}' rx='2'>{tip}</rect>")
+    s.append(_colorbar(left, H - 28, vmax, uid=uid))
+    s.append(f"<text x='{left-8}' y='{H-19}' fill='{MUT}' font-size='8' text-anchor='end'>log2 FC</text>")
+    return "".join(s) + "</svg>"
+
+
+def svg_contrast_corr(corr: pd.DataFrame, shared: pd.DataFrame, relation=None, uid="cbctr"):
     """contrast x contrast similarity heatmap (diverging, hierarchical order)."""
     labels = list(corr.columns)
     n = len(labels)
@@ -357,7 +390,7 @@ def svg_contrast_corr(corr: pd.DataFrame, shared: pd.DataFrame, relation=None):
                    + f" · {sh} shared terms{rl}")
             s.append(f"<rect x='{left+j*cell}' y='{top+i*cell}' width='{cell-1}' height='{cell-1}' "
                      f"fill='{fill}'><title>{tip}</title></rect>")
-    s.append(_colorbar(left, H - 28, 1.0, width=150, uid="cbctr"))
+    s.append(_colorbar(left, H - 28, 1.0, width=150, uid=uid))
     return "".join(s) + "</svg>"
 
 
@@ -570,14 +603,14 @@ EXPORT_JS = """
 """
 
 
-def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, branding=None, pubs=None):
+def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, branding=None, pubs=None, prots=None):
     b = {"title": "Pathfinder",
          "subtitle": "Pathway And Term Harmonisation For INtegrated Design Exploration & Reporting",
          "affiliation": "Proteogen · Université de Caen",
          "icon_b64": None, "icon_svg": None}
     if branding:
         b.update({k: v for k, v in branding.items() if v is not None})
-    tabs = ["Summary", "Overview", "Meta-GO", "Exploration", "Protein UMAP"]
+    tabs = ["Summary", "Overview", "Proteins", "Meta-GO", "Exploration", "Protein UMAP"]
     # KPI cards
     kcards = "".join(
         f"<div class='kpi'><div class='kv'>{_esc(v)}</div><div class='kl'>{_esc(k)}</div></div>"
@@ -787,7 +820,43 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
     else:
         umap_p_html = "<p class='mut'>Protein UMAP unavailable.</p>"
 
-    panels = {"Summary": _resume_html(resume), "Overview": overview,
+    # Proteins - which proteins carry the signature
+    if prots is not None and not prots["matrix"].empty:
+        t, matrix = prots["table"], prots["matrix"]
+        corder = [c for c in (prots.get("contrast_order") or []) if c in matrix.columns]
+        m = matrix[corder] if len(corder) == matrix.shape[1] else matrix
+        top = t.head(40)
+        hm = svg_protein_heatmap(m.reindex(top.index), top)
+        cols = [c for c in ("gene", "n_sig", "pattern", "best_pi", "median_robustness",
+                            "max_abs_lfc", "up_in", "down_in") if c in t.columns]
+        tbl = _table(t[cols].head(30).reset_index().rename(columns={"index": "protein"}),
+                     max_rows=30)
+        cc = prots.get("contrast_corr")
+        cc_html = ""
+        if cc is not None and not cc.empty and cc.shape[0] >= 2:
+            fig = svg_contrast_corr(cc, prots.get("contrast_shared"), prots.get("contrast_relation"),
+                                    uid="cbctrprot")
+            if fig:
+                cc_html = ("<h3>Contrast clustering <span class='mut'>· by protein signature</span></h3>"
+                           + fig + "<p class='mut'>Same measure as the Meta-GO tab, computed on "
+                           "protein fold-changes instead of term z-scores. Agreement between the "
+                           "two views is a strong sign; disagreement means the shared functions "
+                           "rest on different proteins.</p>")
+        pi_note = ("Ranked by recurrence, then by Pi-score (|LFC| × −log10 p). The Pi-score orders "
+                   "proteins; inclusion rests on the adjusted p-value alone."
+                   if prots.get("has_pi") else
+                   "No Pi-score found upstream: ranked by recurrence then |LFC|.")
+        proteins_html = (
+            f"<p class='mut'>{len(matrix)} proteins significant in at least one of the "
+            f"{matrix.shape[1]} contrasts. {pi_note}</p>"
+            f"<h3>Protein × contrast <span class='mut'>· top 40 by recurrence</span></h3>{hm}"
+            f"<h3>Core signature</h3>{tbl}"
+            f"<p class='mut'>Full table in the <code>Proteins_core</code> sheet, complete matrix "
+            f"in <code>Proteins_matrix</code>.</p>{cc_html}")
+    else:
+        proteins_html = "<p class='mut'>No protein reaches significance in any contrast.</p>"
+
+    panels = {"Summary": _resume_html(resume), "Overview": overview, "Proteins": proteins_html,
               "Meta-GO": metago, "Exploration": explore_html, "Protein UMAP": umap_p_html}
 
     # Publications (online axis) - tab added only when present

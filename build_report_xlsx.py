@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 
-def build(path, meta_go, explore, provenance: dict, resume=None, pubs=None):
+def build(path, meta_go, explore, provenance: dict, resume=None, pubs=None, prots=None):
     with pd.ExcelWriter(path, engine="openpyxl") as xw:
         # provenance first
         pd.DataFrame(list(provenance.items()), columns=["key", "value"]).to_excel(
@@ -41,6 +41,22 @@ def build(path, meta_go, explore, provenance: dict, resume=None, pubs=None):
         cc = meta_go.get("contrast_corr")
         if cc is not None and not cc.empty:
             cc.to_excel(xw, sheet_name="Contrast_similarity")
+
+        # --- Proteins (which proteins carry the signature) ---
+        if prots is not None and not prots["matrix"].empty:
+            t = prots["table"]
+            cols = [c for c in ("gene", "description", "n_sig", "pattern", "recurrence",
+                                "best_pi", "median_pi", "median_robustness", "max_abs_lfc",
+                                "up_in", "down_in") if c in t.columns]
+            t[cols].to_excel(xw, sheet_name="Proteins_core")
+            m = prots["matrix"].copy()
+            for c in ("gene", "n_sig", "pattern"):
+                if c in t.columns:
+                    m.insert(0, c, t[c].reindex(m.index))
+            m.to_excel(xw, sheet_name="Proteins_matrix")
+            cc = prots.get("contrast_corr")
+            if cc is not None and not cc.empty:
+                cc.to_excel(xw, sheet_name="Contrast_similarity_prot")
 
         # --- Exploration ---
         explore["pca"]["scores"].to_excel(xw, sheet_name="PCA_scores")

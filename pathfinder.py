@@ -26,6 +26,7 @@ import pandas as pd
 import io_layer
 import axis_meta_go
 import axis_explore
+import axis_proteins
 import axis_publications
 import summary as summary_mod
 import species as species_mod
@@ -318,6 +319,12 @@ def main(argv=None):
 
     explore = axis_explore.run(stats, do_umap=not args.no_umap, factors_df=factors_df)
 
+    # ---- Protein axis (which proteins carry the signature) ----
+    prots = axis_proteins.run(stats, p_thr=args.pthr)
+    provenance["proteins_significant"] = (
+        f"{prots['n_significant']} proteins significant in >=1 contrast (p.adj < {args.pthr})"
+        + (" - ranked by recurrence then Pi-score" if prots.get("has_pi") else ""))
+
     # ---- Species (taxid) + Publications axis (online, opt-in) ----
     org_arg = args.org
     excel_org = None
@@ -386,11 +393,12 @@ def main(argv=None):
         "Samples": len(stats.sample_int_cols),
         "Proteins": len(stats.comp),
         "Significant GO cells": n_go_sig,
+        "Core proteins": prots["n_significant"],
         "PC1 variance": f"{explore['pca']['var_exp'][0]:.0f}%",
     }
 
     # ---- Interpretive summary ----
-    resume = summary_mod.generate(stats, go_res, explore, provenance)
+    resume = summary_mod.generate(stats, go_res, explore, provenance, prots)
     md_path = os.path.join(args.outdir, "pathfinder_summary.md")
     try:
         with open(md_path, "w", encoding="utf-8") as f:
@@ -414,7 +422,7 @@ def main(argv=None):
             writer_fn(alt)
             return alt
 
-    xlsx_path = _safe_write(lambda p: build_xlsx.build(p, go_res, explore, provenance, resume, pubs),
+    xlsx_path = _safe_write(lambda p: build_xlsx.build(p, go_res, explore, provenance, resume, pubs, prots),
                             os.path.join(args.outdir, "pathfinder_synthesis.xlsx"), "xlsx")
     # branding: inline SVG mark (PNG base64 fallback)
     import base64
@@ -432,7 +440,7 @@ def main(argv=None):
                 break
     branding = {"icon_b64": icon_b64, "icon_svg": icon_svg}
 
-    html_path = _safe_write(lambda p: build_html.build(p, go_res, explore, provenance, kpis, resume, branding, pubs),
+    html_path = _safe_write(lambda p: build_html.build(p, go_res, explore, provenance, kpis, resume, branding, pubs, prots),
                             os.path.join(args.outdir, "pathfinder_report.html"), "html")
 
     print("\n" + resume["markdown"] + "\n")

@@ -68,6 +68,13 @@ First release.
   from the highlighted statements, which now also require |r| >= 0.3.
 
 ### Added
+- **Protein axis**: protein x contrast matrix of significant fold-changes, core
+  signature (recurrent proteins), contrast-specific proteins and opposite regulation,
+  ranked by recurrence then Pi-score, with the robustness score as a confidence
+  column. New Proteins tab, `Proteins_core` / `Proteins_matrix` sheets, a summary
+  section, and contrast clustering computed on proteins - to be compared with the
+  GO-level one. The Pi-score orders proteins but never selects them: inclusion stays
+  on the adjusted p-value.
 - **Species resolution against STRING's own list** (~12k organisms) when the built-in
   table does not know the organism: scientific names ('Camelina sativa'), genus alone
   ('cannabis') and gProfiler codes all work, and the list is cached on disk. An

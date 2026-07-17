@@ -272,11 +272,53 @@ def _matrix_caveat(stats):
             "intensity matrix for an unbiased assessment."]
 
 
-def generate(stats, meta_go, explore, provenance):
+def _protein_section(prots):
+    """Which proteins carry the signature - the table that ends up in a paper."""
+    if prots is None or prots["matrix"].empty:
+        return ["No protein reaches significance in any contrast."]
+    t, matrix = prots["table"], prots["matrix"]
+    n_c = matrix.shape[1]
+    lines = [f"{len(matrix)} proteins significant in at least one of the {n_c} contrasts."]
+    vc = t["pattern"].value_counts().to_dict()
+    shared = vc.get("shared up", 0) + vc.get("shared down", 0)
+    specific = vc.get("specific up", 0) + vc.get("specific down", 0)
+    opposite = vc.get("opposite", 0)
+    lines.append(f"{shared} recurrent (same direction in several contrasts), {specific} "
+                 f"specific to one contrast, {opposite} regulated in opposite directions.")
+
+    core = t[t["n_sig"] >= max(2, int(0.5 * n_c))]
+    if len(core):
+        names = []
+        for i, r in core.head(5).iterrows():
+            label = r.get("gene") if isinstance(r.get("gene"), str) and r.get("gene") not in ("", "nan") else i
+            pi = f", Pi={r['best_pi']:.1f}" if "best_pi" in core.columns and pd.notna(r["best_pi"]) else ""
+            names.append(f"{label} ({int(r['n_sig'])}/{n_c} contrasts{pi})")
+        lines.append(f"Core signature - {len(core)} proteins significant in at least half the "
+                     f"contrasts, top: {'; '.join(names)}.")
+    else:
+        lines.append("No protein is significant in half the contrasts or more: the signatures "
+                     "are largely contrast-specific.")
+
+    opp = t[t["pattern"] == "opposite"]
+    if len(opp):
+        names = []
+        for i, r in opp.head(3).iterrows():
+            label = r.get("gene") if isinstance(r.get("gene"), str) and r.get("gene") not in ("", "nan") else i
+            names.append(f"{label} (up in {r['up_in'].split(',')[0]}, down in {r['down_in'].split(',')[0]})")
+        lines.append(f"Opposite regulation, often the most informative: {'; '.join(names)}.")
+
+    if prots.get("has_pi"):
+        lines.append("Proteins are ranked by recurrence then Pi-score (|LFC| x -log10 p). The "
+                     "Pi-score orders them; inclusion still rests on the adjusted p-value.")
+    return lines
+
+
+def generate(stats, meta_go, explore, provenance, prots=None):
     sections = [
         ("Experimental design (PCA)", _matrix_caveat(stats) + _design_section(explore)),
         ("Design factors (PC × factors)", _multifactor_section(explore)),
         ("Quality & homogeneity", _qc_section(explore, stats.cond_map)),
+        ("Protein-level signature", _protein_section(prots)),
         ("Functional synthesis (Meta-GO)", _go_section(meta_go)),
         ("Per-contrast detail", _contrast_section(meta_go)),
     ]

@@ -36,7 +36,8 @@ class TestEndToEnd:
                    "--design", workbook_full["design"])
         sheets = pd.read_excel(out / "pathfinder_synthesis.xlsx", sheet_name=None)
         for s in ("provenance", "Summary", "MetaGO_matrix", "MetaGO_directionality",
-                  "Contrast_similarity", "PCA_scores", "PC_factor_assoc",
+                  "Contrast_similarity", "Proteins_core", "Proteins_matrix",
+                  "PCA_scores", "PC_factor_assoc",
                   "PC_factor_multi", "Sample_correlation", "PCA_scree"):
             assert s in sheets, f"sheet {s} missing"
 
@@ -95,7 +96,7 @@ class TestHtmlReport:
         return (out / "pathfinder_report.html").read_text(encoding="utf-8")
 
     def test_tabs_present(self, html):
-        for tab in ("Summary", "Overview", "Meta-GO", "Exploration", "Protein UMAP"):
+        for tab in ("Summary", "Overview", "Proteins", "Meta-GO", "Exploration", "Protein UMAP"):
             assert f">{tab}<" in html
 
     def test_tab_switching_uses_safe_ids(self, html):
