@@ -99,6 +99,13 @@ class TestHtmlReport:
         for tab in ("Summary", "Overview", "Proteins", "Meta-GO", "Exploration", "Protein UMAP"):
             assert f">{tab}<" in html
 
+    def test_summary_leads_with_verdict_cards(self, html):
+        """The summary must show the key facts at a glance, not only prose."""
+        sec = html.split("id='sec-0'")[1].split("</section>")[0]
+        assert sec.count("class='vcard'") >= 4
+        for label in ("Design", "Quality", "Core proteins"):
+            assert f">{label}<" in sec
+
     def test_tab_switching_uses_safe_ids(self, html):
         """REGRESSION: onclick=show('Vue d'ensemble') broke on the apostrophe."""
         assert 'onclick="show(0)"' in html

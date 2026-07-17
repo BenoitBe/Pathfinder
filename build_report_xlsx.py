@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 
-def build(path, meta_go, explore, provenance: dict, resume=None, pubs=None, prots=None):
+def build(path, meta_go, explore, provenance: dict, resume=None, pubs=None, prots=None, wgcna=None):
     with pd.ExcelWriter(path, engine="openpyxl") as xw:
         # provenance first
         pd.DataFrame(list(provenance.items()), columns=["key", "value"]).to_excel(
@@ -57,6 +57,17 @@ def build(path, meta_go, explore, provenance: dict, resume=None, pubs=None, prot
             cc = prots.get("contrast_corr")
             if cc is not None and not cc.empty:
                 cc.to_excel(xw, sheet_name="Contrast_similarity_prot")
+
+        # --- WGCNA (read from upstream) ---
+        if wgcna:
+            if wgcna["association"] is not None and not wgcna["association"].empty:
+                wgcna["association"].to_excel(xw, sheet_name="WGCNA_module_condition", index=False)
+            if wgcna["core_enrichment"] is not None and not wgcna["core_enrichment"].empty:
+                wgcna["core_enrichment"].to_excel(xw, sheet_name="WGCNA_core_enrichment", index=False)
+            if wgcna.get("contrast_association") is not None and not wgcna["contrast_association"].empty:
+                wgcna["contrast_association"].to_excel(xw, sheet_name="WGCNA_module_contrast", index=False)
+            if wgcna["hubs"] is not None and not wgcna["hubs"].empty:
+                wgcna["hubs"].to_excel(xw, sheet_name="WGCNA_hubs", index=False)
 
         # --- Exploration ---
         explore["pca"]["scores"].to_excel(xw, sheet_name="PCA_scores")

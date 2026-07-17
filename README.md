@@ -33,6 +33,12 @@ contrasts, plus an automatic interpretive summary.
   regulated in opposite directions. Ranked by recurrence then Pi-score (|LFC| ×
   −log10 p), with the upstream robustness score carried through as a confidence
   column. The Pi-score orders proteins; inclusion rests on the adjusted p-value alone.
+- **Co-expression modules (WGCNA)** — the modules computed upstream are *read*, not
+  recomputed, and crossed with what Pathfinder knows: which module eigengene tracks
+  the condition (Kruskal-Wallis + ε²), **which comparison it separates** (Mann-Whitney
+  + rank-biserial, with the exact-test floor reported when replicates are few), where
+  the core protein signature sits (Fisher exact per module), and each module's hubs.
+  'grey' is WGCNA's unassigned bin and is never treated as a module.
 - **Meta-GO** — term × contrast matrix of signed z-scores, cross-directionality
   (shared up/down vs opposite regulation), Jaccard redundancy grouping with a
   **Non-redundant / All terms** switch. Split by source (BP / MF / CC / KEGG / Reactome).
@@ -166,6 +172,7 @@ pathfinder/
 ├── pathfinder.py              # Main orchestrator + CLI
 ├── io_layer.py                # Excel + design readers → shared objects
 ├── axis_proteins.py           # Protein axis (protein × contrast, core signature)
+├── axis_wgcna.py              # WGCNA axis (modules read from upstream)
 ├── axis_meta_go.py            # Meta-GO axis (term × contrast)
 ├── axis_explore.py            # Exploration axis (PCA, multi-factor, UMAP)
 ├── axis_publications.py       # Publications axis (STRING PMID, online)
@@ -200,12 +207,18 @@ pathfinder_output/
 └── pathfinder_summary.md       # Interpretive summary (standalone)
 ```
 
-**HTML tabs**: Summary · Overview · Proteins · Meta-GO · Exploration · Protein UMAP · Publications
+**HTML tabs**: Summary · Overview · Proteins · WGCNA · Meta-GO · Exploration · Protein UMAP · Publications
+
+The Summary opens with colour-coded verdict cards (design, quality, core proteins,
+core module, top function) and a chain showing where the signature lives: *core
+proteins → co-expression module → comparison it separates*, or an explicit break when
+a link is missing.
 
 Every figure carries **SVG** and **PNG** export buttons (hover over it): vector SVG for
 Illustrator/Inkscape, 2× PNG for slides. Filenames are derived from the figure title.
 
-**Excel sheets**: provenance · Summary · Proteins_core · Proteins_matrix · MetaGO_matrix · MetaGO_directionality ·
+**Excel sheets**: provenance · Summary · Proteins_core · Proteins_matrix ·
+WGCNA_module_condition · WGCNA_core_enrichment · WGCNA_hubs · MetaGO_matrix · MetaGO_directionality ·
 Contrast_similarity · PCA_scores · PCA_loadings · PC_factor_assoc · PC_factor_multi ·
 Sample_correlation · PCA_scree · Publications
 

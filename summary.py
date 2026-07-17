@@ -313,12 +313,182 @@ def _protein_section(prots):
     return lines
 
 
-def generate(stats, meta_go, explore, provenance, prots=None):
+def _wgcna_section(wgcna):
+    """Co-expression structure: which module tracks the design, and where the core sits."""
+    if not wgcna or not wgcna.get("n_modules"):
+        return []
+    lines = [f"{wgcna['n_modules']} co-expression modules read from the upstream WGCNA "
+             "(not recomputed)."]
+    a = wgcna.get("association")
+    if a is not None and not a.empty:
+        hits = a[(~a["is_grey"]) & (a["p_adj_BH"] < P_ADJ_THR) & (a["effect"] >= EFF_LARGE)]
+        if len(hits):
+            parts = [f"{r['module']} (effect={r['effect']:.2f}, p={_fmt_p(r['p_adj_BH'])})"
+                     for _, r in hits.head(3).iterrows()]
+            lines.append(f"Module eigengenes tracking the condition: {', '.join(parts)} — "
+                         "these modules respond to the design.")
+        else:
+            lines.append("No module eigengene is significantly associated with the condition "
+                         "after correction: co-expression structure and design do not align.")
+    ca = wgcna.get("contrast_association")
+    if ca is not None and not ca.empty:
+        best = ca[~ca["is_grey"]].head(1)
+        if len(best):
+            r = best.iloc[0]
+            floor = ca.attrs.get("p_floor")
+            note = ""
+            if floor and floor > 0.05:
+                note = (f" (with {ca.attrs.get('n_per_group')} replicates per group the exact "
+                        f"test cannot go below p={floor:.2f}: read the separation, not the p)")
+            lines.append(f"Module {r['module']} separates {r['contrast']} best "
+                         f"(separation={r['effect']:.2f}, p={_fmt_p(r['p_value'])}){note}.")
+    e = wgcna.get("core_enrichment")
+    if e is not None and not e.empty:
+        hits = e[(~e["is_grey"]) & (e["p_adj_BH"] < 0.05)]
+        if len(hits):
+            r = hits.iloc[0]
+            lines.append(f"The core protein signature concentrates in module {r['module']} "
+                         f"({int(r['n_core'])}/{int(r['n_proteins'])} of its proteins, "
+                         f"p={_fmt_p(r['p_adj_BH'])}) — recurrent proteins are co-expressed, "
+                         "not scattered across the network.")
+        else:
+            lines.append("The core signature is not concentrated in any module: recurrent "
+                         "proteins are spread across the co-expression network.")
+    return lines
+
+
+def _headline(stats, meta_go, explore, prots, wgcna):
+    """The five facts a reader should get at a glance, as structured data.
+
+    level: 'ok' (nothing to flag), 'warn' (needs attention), 'info' (neutral).
+    """
+    cards = []
+
+    # --- design
+    assoc = explore["pc_factor"].set_index("PC")
+    ve = {f"PC{i+1}": float(v) for i, v in enumerate(explore["pca"]["var_exp"])}
+    pcol = "p_adj_BH" if "p_adj_BH" in assoc.columns else "p_value"
+    good = [(pc, ve.get(pc, 0), assoc.loc[pc, "epsilon2"], assoc.loc[pc, pcol])
+            for pc in assoc.index
+            if pd.notna(assoc.loc[pc, pcol]) and assoc.loc[pc, pcol] < P_ADJ_THR
+            and assoc.loc[pc, "epsilon2"] >= EFF_MED]
+    if assoc[pcol].isna().all():
+        cards.append({"label": "Design", "value": "not testable", "level": "warn",
+                      "detail": "no replicates"})
+    elif good:
+        pc, var, eps2, p = max(good, key=lambda t: t[1])
+        sig = p < 0.05
+        cards.append({"label": "Design", "value": f"{pc} · {var:.0f}% var.",
+                      "detail": f"ε²={eps2:.2f}, p={_fmt_p(p)}" + ("" if sig else " (trend)"),
+                      "level": "ok" if sig else "warn"})
+    else:
+        cards.append({"label": "Design", "value": "not captured", "level": "warn",
+                      "detail": "no PC follows the condition"})
+
+    # --- quality
+    qc = _qc_section(explore, stats.cond_map)
+    flagged = [l for l in qc if l.startswith("⚠")]
+    cards.append({"label": "Quality",
+                  "value": "clean" if not flagged else f"{len(flagged)} flag(s)",
+                  "detail": "replicates homogeneous" if not flagged else flagged[0][:60],
+                  "level": "ok" if not flagged else "warn"})
+
+    # --- core proteins
+    if prots and not prots["matrix"].empty:
+        t, n_c = prots["table"], prots["matrix"].shape[1]
+        core = t[t["n_sig"] >= max(2, int(0.5 * n_c))]
+        cards.append({"label": "Core proteins", "value": f"{len(core)}",
+                      "detail": f"significant in ≥ {max(2, int(0.5*n_c))}/{n_c} contrasts",
+                      "level": "info"})
+    else:
+        cards.append({"label": "Core proteins", "value": "0", "level": "warn",
+                      "detail": "nothing significant"})
+
+    # --- module holding the core signature
+    mod_card = {"label": "Core module", "value": "—", "level": "info",
+                "detail": "no WGCNA module in the workbook"}
+    if wgcna and wgcna.get("n_modules"):
+        e = wgcna.get("core_enrichment")
+        hits = e[(~e["is_grey"]) & (e["p_adj_BH"] < 0.05)] if e is not None and not e.empty \
+            else pd.DataFrame()
+        if len(hits):
+            r = hits.iloc[0]
+            mod_card = {"label": "Core module", "value": str(r["module"]),
+                        "detail": f"{int(r['n_core'])}/{int(r['n_proteins'])} proteins, "
+                                  f"p={_fmt_p(r['p_adj_BH'])}", "level": "ok"}
+        else:
+            mod_card = {"label": "Core module", "value": "scattered", "level": "info",
+                        "detail": "core proteins span several modules"}
+    cards.append(mod_card)
+
+    # --- dominant function
+    if meta_go and not meta_go["matrix"].empty:
+        meta = meta_go["meta"]
+        rep = meta[meta["is_representative"]] if "is_representative" in meta.columns else meta
+        top = rep.sort_values("n_sig", ascending=False).head(1)
+        if len(top):
+            r = top.iloc[0]
+            cards.append({"label": "Top function", "value": str(r["term_name"])[:40],
+                          "detail": f"{int(r['n_sig'])} contrasts · {r['source']}",
+                          "level": "info"})
+    return cards
+
+
+def _convergence(prots, wgcna):
+    """The chain a reader is really after: core proteins -> module -> comparison.
+
+    Returns None when a link is missing, rather than implying one.
+    """
+    if not (prots and not prots["matrix"].empty and wgcna and wgcna.get("n_modules")):
+        return None
+    e = wgcna.get("core_enrichment")
+    if e is None or e.empty:
+        return None
+    hits = e[(~e["is_grey"]) & (e["p_adj_BH"] < 0.05)]
+    n_c = prots["matrix"].shape[1]
+    core_n = int((prots["table"]["n_sig"] >= max(2, int(0.5 * n_c))).sum())
+    if not len(hits):
+        return {"core_n": core_n, "module": None, "contrast": None,
+                "verdict": "The core signature is spread across the co-expression "
+                           "network: no module concentrates it."}
+    r = hits.iloc[0]
+    out = {"core_n": core_n, "module": str(r["module"]),
+           "module_detail": f"{int(r['n_core'])}/{int(r['n_proteins'])} proteins "
+                            f"(p={_fmt_p(r['p_adj_BH'])})",
+           "contrast": None, "contrast_detail": None, "verdict": None}
+
+    ca = wgcna.get("contrast_association")
+    if ca is not None and not ca.empty:
+        # eigengene column is 'ME_<module>' while the assignment says '<module>'
+        m = ca[ca["module"].str.replace("^ME[_.-]?", "", regex=True).str.lower()
+               == out["module"].lower()]
+        if len(m):
+            best = m.sort_values(["effect", "p_value"], ascending=[False, True]).iloc[0]
+            floor = ca.attrs.get("p_floor")
+            note = ""
+            if floor and floor > 0.05:
+                note = (f" — with {ca.attrs.get('n_per_group')} replicates per group the exact "
+                        f"test cannot go below p={floor:.2f}, so read the effect, not the p-value")
+            out["contrast"] = str(best["contrast"])
+            out["contrast_detail"] = (f"separation={best['effect']:.2f}, "
+                                      f"p={_fmt_p(best['p_value'])}{note}")
+            out["verdict"] = (f"The {core_n} recurrent proteins concentrate in module "
+                              f"{out['module']}, whose eigengene separates "
+                              f"{best['contrast']} best.")
+    if not out["verdict"]:
+        out["verdict"] = (f"The {core_n} recurrent proteins concentrate in module "
+                          f"{out['module']}, but no eigengene was available to link it "
+                          "to a comparison.")
+    return out
+
+
+def generate(stats, meta_go, explore, provenance, prots=None, wgcna=None):
     sections = [
         ("Experimental design (PCA)", _matrix_caveat(stats) + _design_section(explore)),
         ("Design factors (PC × factors)", _multifactor_section(explore)),
         ("Quality & homogeneity", _qc_section(explore, stats.cond_map)),
         ("Protein-level signature", _protein_section(prots)),
+        ("Co-expression modules (WGCNA)", _wgcna_section(wgcna)),
         ("Functional synthesis (Meta-GO)", _go_section(meta_go)),
         ("Per-contrast detail", _contrast_section(meta_go)),
     ]
@@ -335,4 +505,6 @@ def generate(stats, meta_go, explore, provenance, prots=None):
         md.append("")
     return {"markdown": "\n".join(md),
             "sections": sections,
+            "headline": _headline(stats, meta_go, explore, prots, wgcna),
+            "convergence": _convergence(prots, wgcna),
             "lines": pd.DataFrame(lines_flat)}

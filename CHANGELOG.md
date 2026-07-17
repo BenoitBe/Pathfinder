@@ -5,6 +5,9 @@
 First release.
 
 ### Fixed
+- **Text columns are detected whatever pandas calls them** ('object' in pandas 2,
+  'str' in pandas 3): the WGCNA protein-to-module assignment was silently lost on
+  recent pandas.
 - **Unnamed columns can no longer pose as samples.** GO sheets exported without a
   header row carry 'Unnamed: 3' columns; they were counted as sample candidates, so a
   GO sheet could compete against the real intensity matrix for the PCA.
@@ -68,6 +71,20 @@ First release.
   from the highlighted statements, which now also require |r| >= 0.3.
 
 ### Added
+- **Summary redesigned around the key facts**: colour-coded verdict cards (design,
+  quality, core proteins, core module, top function) and a visual chain answering the
+  question the report is for - do the core proteins fall in one module, and which
+  comparison does that module follow? A missing link is drawn as a break, never
+  implied.
+- **Module vs contrast test**: the eigengene is compared between the two groups of
+  every contrast (Mann-Whitney + rank-biserial). The exact test has a hard floor with
+  few replicates (3 vs 3 cannot go below p=0.1), which is now stated rather than
+  reported as 'not significant'.
+- **WGCNA axis**: the co-expression modules computed upstream are read (never
+  recomputed) and crossed with the rest of the report - module eigengene vs condition
+  (Kruskal-Wallis + epsilon squared), Fisher exact test locating the core protein
+  signature across modules, and module hubs. New WGCNA tab and three sheets. 'grey',
+  WGCNA's unassigned bin, is flagged and excluded from module counts.
 - **Protein axis**: protein x contrast matrix of significant fold-changes, core
   signature (recurrent proteins), contrast-specific proteins and opposite regulation,
   ranked by recurrence then Pi-score, with the robustness score as a confidence

@@ -27,6 +27,7 @@ import io_layer
 import axis_meta_go
 import axis_explore
 import axis_proteins
+import axis_wgcna
 import axis_publications
 import summary as summary_mod
 import species as species_mod
@@ -321,6 +322,18 @@ def main(argv=None):
 
     # ---- Protein axis (which proteins carry the signature) ----
     prots = axis_proteins.run(stats, p_thr=args.pthr)
+    # ---- WGCNA axis (co-expression structure computed upstream) ----
+    wgcna = None
+    try:
+        _xls = pd.read_excel(args.stats, sheet_name=None)
+        core_ids = list(prots["table"].head(200).index) if not prots["matrix"].empty else []
+        wgcna = axis_wgcna.run(_xls, stats, core_ids=core_ids)
+    except Exception as e:
+        print(f"[Pathfinder] \u26a0 WGCNA sheets unusable ({type(e).__name__}) - axis skipped.")
+    if wgcna:
+        print(f"[Pathfinder] WGCNA: {wgcna['n_modules']} module(s) read from the workbook")
+        provenance["wgcna_modules"] = f"{wgcna['n_modules']} modules (read, not recomputed)"
+
     provenance["proteins_significant"] = (
         f"{prots['n_significant']} proteins significant in >=1 contrast (p.adj < {args.pthr})"
         + (" - ranked by recurrence then Pi-score" if prots.get("has_pi") else ""))
@@ -398,7 +411,7 @@ def main(argv=None):
     }
 
     # ---- Interpretive summary ----
-    resume = summary_mod.generate(stats, go_res, explore, provenance, prots)
+    resume = summary_mod.generate(stats, go_res, explore, provenance, prots, wgcna)
     md_path = os.path.join(args.outdir, "pathfinder_summary.md")
     try:
         with open(md_path, "w", encoding="utf-8") as f:
@@ -422,7 +435,7 @@ def main(argv=None):
             writer_fn(alt)
             return alt
 
-    xlsx_path = _safe_write(lambda p: build_xlsx.build(p, go_res, explore, provenance, resume, pubs, prots),
+    xlsx_path = _safe_write(lambda p: build_xlsx.build(p, go_res, explore, provenance, resume, pubs, prots, wgcna),
                             os.path.join(args.outdir, "pathfinder_synthesis.xlsx"), "xlsx")
     # branding: inline SVG mark (PNG base64 fallback)
     import base64
@@ -440,7 +453,7 @@ def main(argv=None):
                 break
     branding = {"icon_b64": icon_b64, "icon_svg": icon_svg}
 
-    html_path = _safe_write(lambda p: build_html.build(p, go_res, explore, provenance, kpis, resume, branding, pubs, prots),
+    html_path = _safe_write(lambda p: build_html.build(p, go_res, explore, provenance, kpis, resume, branding, pubs, prots, wgcna),
                             os.path.join(args.outdir, "pathfinder_report.html"), "html")
 
     print("\n" + resume["markdown"] + "\n")

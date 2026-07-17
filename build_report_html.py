@@ -467,17 +467,86 @@ def _table(df: pd.DataFrame, max_rows=60, floatfmt="{:.3g}"):
 # --------------------------------------------------------------------------- #
 # Assemblage                                                                    #
 # --------------------------------------------------------------------------- #
+def _svg_chain(conv):
+    """Core proteins -> module -> comparison, as one glance."""
+    if not conv:
+        return ""
+    W, H = 980, 132
+    box_w, box_h, gap = 260, 76, 60
+    y = 26
+    s = [f"<svg viewBox='0 0 {W} {H}' width='{W}' height='{H}' style='max-width:100%;height:auto'>"]
+
+    def box(x, title, value, detail, colour, dim=False):
+        op = "0.35" if dim else "1"
+        s.append(f"<g opacity='{op}'>")
+        s.append(f"<rect x='{x}' y='{y}' width='{box_w}' height='{box_h}' rx='8' "
+                 f"fill='{PANEL}' stroke='{colour}' stroke-width='1.5'/>")
+        s.append(f"<text x='{x+14}' y='{y+19}' fill='{MUT}' font-size='10' "
+                 f"letter-spacing='0.06em'>{_esc(title.upper())}</text>")
+        s.append(f"<text x='{x+14}' y='{y+43}' fill='#fff' font-size='19' "
+                 f"font-weight='700'>{_esc(str(value)[:22])}</text>")
+        s.append(f"<text x='{x+14}' y='{y+63}' fill='{MUT}' font-size='10'>"
+                 f"{_esc(str(detail)[:44])}</text>")
+        s.append("</g>")
+
+    def arrow(x, ok=True):
+        col = GREEN if ok else GRID
+        s.append(f"<line x1='{x}' y1='{y+box_h/2}' x2='{x+gap-14}' y2='{y+box_h/2}' "
+                 f"stroke='{col}' stroke-width='2'/>")
+        s.append(f"<path d='M{x+gap-14},{y+box_h/2} l-8,-5 l0,10 z' fill='{col}'/>")
+
+    linked = bool(conv.get("module"))
+    box(0, "core signature", f"{conv['core_n']} proteins", "recurrent across contrasts", BLUE)
+    arrow(box_w, linked)
+    if linked:
+        box(box_w + gap, "co-expression module", conv["module"],
+            conv.get("module_detail", ""), GREEN)
+        arrow(2 * box_w + gap, bool(conv.get("contrast")))
+        if conv.get("contrast"):
+            box(2 * (box_w + gap), "separates best", conv["contrast"],
+                conv.get("contrast_detail", "")[:44], PURP)
+        else:
+            box(2 * (box_w + gap), "comparison", "not linked",
+                "no eigengene available", GRID, dim=True)
+    else:
+        box(box_w + gap, "co-expression module", "scattered",
+            "no module concentrates it", AMBER)
+        box(2 * (box_w + gap), "comparison", "—", "", GRID, dim=True)
+    s.append("</svg>")
+    return "".join(s)
+
+
 def _resume_html(resume):
     if resume is None or not resume.get("sections"):
         return "<p class='mut'>Summary unavailable.</p>"
-    blocks = []
+    out = []
+
+    # verdict cards: the five facts, colour-coded
+    cards = resume.get("headline") or []
+    if cards:
+        cols = {"ok": GREEN, "warn": AMBER, "info": BLUE}
+        chips = "".join(
+            f"<div class='vcard' style='border-left:3px solid {cols.get(c.get('level'), BLUE)}'>"
+            f"<div class='vl'>{_esc(c['label'])}</div>"
+            f"<div class='vv'>{_esc(str(c['value']))}</div>"
+            f"<div class='vd'>{_esc(str(c.get('detail', '')))}</div></div>"
+            for c in cards)
+        out.append(f"<div class='vcards'>{chips}</div>")
+
+    # the chain everyone asks about: core proteins -> module -> comparison
+    conv = resume.get("convergence")
+    if conv:
+        out.append("<h3>Where the signature lives</h3>" + _svg_chain(conv))
+        if conv.get("verdict"):
+            out.append(f"<p class='verdict'>{_esc(conv['verdict'])}</p>")
+
     for title, lines in resume["sections"]:
         items = []
         for l in lines:
             cls = "warn" if l.strip().startswith("⚠") else ""
             items.append(f"<li class='{cls}'>{_esc(l)}</li>")
-        blocks.append(f"<h3>{_esc(title)}</h3><ul class='resume'>{''.join(items)}</ul>")
-    return "".join(blocks)
+        out.append(f"<h3>{_esc(title)}</h3><ul class='resume'>{''.join(items)}</ul>")
+    return "".join(out)
 
 
 EXPORT_JS = """
@@ -603,7 +672,7 @@ EXPORT_JS = """
 """
 
 
-def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, branding=None, pubs=None, prots=None):
+def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, branding=None, pubs=None, prots=None, wgcna=None):
     b = {"title": "Pathfinder",
          "subtitle": "Pathway And Term Harmonisation For INtegrated Design Exploration & Reporting",
          "affiliation": "Proteogen · Université de Caen",
@@ -859,6 +928,45 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
     panels = {"Summary": _resume_html(resume), "Overview": overview, "Proteins": proteins_html,
               "Meta-GO": metago, "Exploration": explore_html, "Protein UMAP": umap_p_html}
 
+    # WGCNA - co-expression structure read from upstream
+    if wgcna and wgcna.get("n_modules"):
+        parts = [f"<p class='mut'>{wgcna['n_modules']} modules read from the upstream WGCNA "
+                 "(Pathfinder does not recompute them). 'grey' is WGCNA's bin for unassigned "
+                 "proteins, flagged as such and never treated as a module.</p>"]
+        a = wgcna.get("association")
+        if a is not None and not a.empty:
+            parts.append("<h3>Module ↔ condition <span class='mut'>· eigengene per sample, "
+                         "Kruskal-Wallis + ε²</span></h3>" + _table(a, max_rows=20)
+                         + "<p class='mut'>The eigengene is the module's first principal "
+                           "component: one value per sample, so it is testable exactly like a "
+                           "PC score. A high ε² means the module responds to the design.</p>")
+        e = wgcna.get("core_enrichment")
+        if e is not None and not e.empty:
+            parts.append("<h3>Where does the core signature sit? <span class='mut'>· Fisher exact"
+                         "</span></h3>" + _table(e, max_rows=20)
+                         + "<p class='mut'>Tests whether the recurrent proteins of the Proteins "
+                           "tab concentrate in one module. Concentration means the signature is "
+                           "co-expressed; dispersion means it cuts across the network.</p>")
+        ca = wgcna.get("contrast_association")
+        if ca is not None and not ca.empty:
+            floor = ca.attrs.get("p_floor")
+            note = ""
+            if floor and floor > 0.05:
+                note = (f" <b>With {ca.attrs.get('n_per_group')} replicates per group the exact "
+                        f"test cannot go below p={floor:.2f}</b>: read the separation, not the "
+                        "p-value.")
+            parts.append("<h3>Which comparison does a module follow? <span class='mut'>· "
+                         "eigengene, Mann-Whitney</span></h3>"
+                         + _table(ca.head(20), max_rows=20)
+                         + "<p class='mut'>Separation is the rank-biserial correlation: 1 means "
+                           "the two groups of that contrast are perfectly split by the module "
+                           "eigengene." + note + "</p>")
+        h = wgcna.get("hubs")
+        if h is not None and not h.empty:
+            parts.append("<h3>Module hubs</h3>" + _table(h, max_rows=30))
+        panels["WGCNA"] = "".join(parts)
+        tabs = tabs[:3] + ["WGCNA"] + tabs[3:]
+
     # Publications (online axis) - tab added only when present
     if pubs is not None and any(pubs.get("results", {}).values()):
         crit = pubs.get("provenance", {}).get("_criterion", "")
@@ -921,6 +1029,13 @@ td{{color:{FG}}} tbody tr:nth-child(even){{background:#11161d}}
 .mut{{color:{MUT};font-size:12px}} .warn{{color:{AMBER};font-size:12px;border-left:3px solid {AMBER};padding-left:8px}}
 ul.resume{{margin:6px 0 4px;padding-left:20px}} ul.resume li{{margin:5px 0;line-height:1.5}}
 ul.resume li.warn{{list-style:none;margin-left:-12px}}
+.vcards{{display:flex;gap:10px;flex-wrap:wrap;margin:4px 0 18px}}
+.vcard{{background:{PANEL};border:1px solid {GRID};border-radius:8px;padding:10px 14px;min-width:170px;flex:1 1 170px}}
+.vcard .vl{{color:{MUT};font-size:10px;letter-spacing:.06em;text-transform:uppercase}}
+.vcard .vv{{color:#fff;font-size:18px;font-weight:700;margin:3px 0 2px;line-height:1.2}}
+.vcard .vd{{color:{MUT};font-size:11px;line-height:1.35}}
+.verdict{{background:{PANEL};border-left:3px solid {GREEN};border-radius:6px;
+ padding:10px 14px;margin:6px 0 16px;font-size:13px;color:{FG}}}
 code{{background:{PANEL};padding:1px 5px;border-radius:4px;color:{PURP}}}
 .goctl{{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:6px 0 10px;font-size:12px;color:{FG}}}
 .goctl select{{background:{PANEL};color:{FG};border:1px solid {GRID};border-radius:5px;padding:3px 6px;font-size:12px}}
