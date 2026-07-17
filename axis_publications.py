@@ -17,6 +17,11 @@ import cache
 
 STRING_URL = "https://string-db.org/api/tsv/enrichment"
 
+# Enrichment is a statistical statement about a SET: below this many genes STRING
+# merely returns papers citing them, which is not an enrichment. Such contrasts are
+# reported as skipped rather than dressed up as a result.
+MIN_GENES = 5
+
 
 def _string_request(identifiers, taxid, timeout=30):
     """Live STRING call (POST). Raises if the network is unavailable -> axis skipped cleanly."""
@@ -60,11 +65,14 @@ def _parse_pmid(tsv, top=15):
 
 
 def _sig_identifiers(stats, contrast, p_thr, max_ids):
-    """Genes (default) or accessions of a contrast's significant proteins, ranked by |LFC|."""
+    """Genes (default) or accessions of a contrast's significant proteins, ranked by |LFC|.
+
+    Returns (ids, n_total) so the caller can tell a small signature from a capped one.
+    """
     comp = stats.comp
     padj, diff = f"{contrast}_p.adj", f"{contrast}_diff"
     if padj not in comp.columns:
-        return []
+        return [], 0
     sub = comp[pd.to_numeric(comp[padj], errors="coerce") < p_thr].copy()
     if diff in comp.columns:
         sub["_abs"] = pd.to_numeric(sub[diff], errors="coerce").abs()
@@ -76,18 +84,28 @@ def _sig_identifiers(stats, contrast, p_thr, max_ids):
     for x in ids:
         if x not in seen:
             seen.add(x); out.append(x)
-        if len(out) >= max_ids:
-            break
-    return out
+    n_total = len(out)
+    return out[:max_ids], n_total
 
 
 def run(stats, taxid, p_thr=0.05, max_ids=400, top_pmid=15, refresh=False, fetcher=None):
     fetch = fetcher or _string_request
     results, prov = {}, {}
+    prov["_criterion"] = (f"significant proteins: p.adj < {p_thr} | max {max_ids} genes per query "
+                          f"(ranked by |LFC|) | top {top_pmid} PMIDs kept per contrast")
+    n_skipped = 0
     for c in stats.contrasts:
-        ids = _sig_identifiers(stats, c, p_thr, max_ids)
-        if not ids:
+        ids, n_total = _sig_identifiers(stats, c, p_thr, max_ids)
+        if n_total == 0:
+            prov[c] = f"no protein with p.adj < {p_thr} - skipped"
+            n_skipped += 1
             continue
+        if n_total < MIN_GENES:
+            prov[c] = (f"only {n_total} significant protein(s) (< {MIN_GENES}) - skipped: "
+                       "enrichment is not meaningful on so few genes")
+            n_skipped += 1
+            continue
+        capped = " (capped)" if n_total > max_ids else ""
         cached = cache.get(ids, taxid, "string_pmid", refresh=refresh)
         if cached:
             rows, when = cached["value"], cached.get("_fetch_date", "cache")
@@ -101,7 +119,10 @@ def run(stats, taxid, p_thr=0.05, max_ids=400, top_pmid=15, refresh=False, fetch
             put = cache.put(ids, taxid, "string_pmid", rows)
             when = put["_fetch_date"]
         results[c] = rows
-        prov[c] = f"{len(ids)} genes -> {len(rows)} PMIDs (fetched {when})"
+        trunc = f", truncated to top {top_pmid}" if len(rows) >= top_pmid else ""
+        prov[c] = (f"{len(ids)}/{n_total} genes{capped} -> {len(rows)} PMIDs{trunc} "
+                   f"(fetched {when})")
+    prov["_skipped"] = f"{n_skipped} contrast(s) skipped (too few significant proteins)"
     return {"results": results, "provenance": prov, "taxid": taxid}
 
 

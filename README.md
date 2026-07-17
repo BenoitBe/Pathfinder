@@ -2,6 +2,8 @@
 
 ![Pathfinder](pathfinder_icon.svg)
 
+[![tests](https://github.com/BenoitBe/pathfinder-synthesis-pipeline/actions/workflows/tests.yml/badge.svg)](https://github.com/BenoitBe/pathfinder-synthesis-pipeline/actions/workflows/tests.yml)
+
 **Downstream companion to Deimos and Phobos.**
 Cross-comparison synthesis and unsupervised exploration — from the Excel report
 of an upstream pipeline to a self-contained interactive HTML report.
@@ -31,7 +33,9 @@ contrasts, plus an automatic interpretive summary.
   **Non-redundant / All terms** switch. Split by source (BP / MF / CC / KEGG / Reactome).
 - **Contrast clustering** — contrasts correlated on their GO signature and ordered
   hierarchically: which comparisons move the same functions the same way, which are
-  opposed. The Meta-GO heatmaps follow that order.
+  opposed. Pairs sharing a condition are flagged (a common reference inflates r
+  mechanically) and excluded from the headline statements. The Meta-GO heatmaps
+  follow that order.
 - **Exploration** — PCA with scree, loadings, and **PC ↔ condition association**
   (Kruskal-Wallis + ε², BH-corrected); inter-sample correlation.
 - **Multi-factor design testing** — every design column (condition, batch,
@@ -40,7 +44,9 @@ contrasts, plus an automatic interpretive summary.
 - **Protein UMAP** — interactive, colourable by mean abundance, per-contrast LFC,
   and **GO term** (source and term-count selectors).
 - **Publications** — STRING **PMID enrichment** per contrast: which papers are
-  over-represented in the signature, with a dated cache snapshot. The species is
+  over-represented in the signature, with a dated cache snapshot. Contrasts with
+  fewer than 5 significant proteins are skipped (enrichment describes a set, not a
+  gene); the criterion, gene-list cap and PMID truncation are reported. The species is
   detected in the workbook and confirmed interactively at launch (`--org` to skip
   the prompt, `--no-online` to stay fully offline).
 - **Automatic interpretive summary** — design capture, batch suspicion, outlier
@@ -104,7 +110,9 @@ python pathfinder.py --design ExperimentalDesign.csv
 
 # Publications axis — Pathfinder detects the species in the workbook and asks to
 # confirm at launch (Enter to accept, 'n' to skip). To answer up-front:
-python pathfinder.py --org rnorvegicus     # or 'Rattus norvegicus', 'rat', or an NCBI taxid
+python pathfinder.py --org rnorvegicus        # gProfiler code
+python pathfinder.py --org "Camelina sativa"  # scientific name (resolved via STRING)
+python pathfinder.py --org 90675              # NCBI taxid, always unambiguous
 python pathfinder.py --org 10116 --refresh # bypass the STRING cache
 python pathfinder.py --no-online           # fully offline: no prompt, no query
 
@@ -122,7 +130,7 @@ python pathfinder.py --diagnose
 | `--outdir`                | Output directory                                            |
 | `--pthr`                  | p threshold masking the GO matrix (default 0.05)            |
 | `--jaccard`               | Cut distance for GO redundancy grouping (default 0.5)       |
-| `--org`                   | Species for the Publications axis (skips the prompt)        |
+| `--org`                   | Species: gProfiler code, scientific name, or NCBI taxid     |
 | `--no-online`             | Fully offline: no species prompt, no STRING query           |
 | `--refresh`               | Bypass the STRING cache                                     |
 | `--no-umap`               | Disable UMAP views                                          |
@@ -130,6 +138,21 @@ python pathfinder.py --diagnose
 | `--write-design-template` | Write a pre-filled design template                          |
 
 ---
+
+## Tests
+
+```
+pip install pytest
+pytest
+```
+
+78 tests covering the loader (GO sheet mapping, per-sample matrix selection, design
+resolution), the three axes, the interpretive summary and the HTML report, plus
+repository invariants (Python 3.9-3.12 syntax, no untranslated strings). Most of them
+encode a regression that actually happened on production data — nested condition names
+silently merging contrasts, a PCA running on a pre-selected subset, correlation
+reported as biology when it was mechanical, figures collapsing to 300 px. CI runs the
+suite on Python 3.9 to 3.12 plus a smoke test on the synthetic dataset.
 
 ## Repository structure
 
@@ -150,8 +173,14 @@ pathfinder/
 ├── pathfinder_mark.svg        # Pathfinder mark (report navigation)
 ├── requirements.txt
 ├── LICENSE
-└── example_data/              # Minimal synthetic dataset generator
-    └── make_synthetic.py
+├── example_data/              # Minimal synthetic dataset generator
+│   └── make_synthetic.py
+└── tests/                     # pytest suite (regression-driven)
+    ├── conftest.py            # synthetic workbooks mirroring real-world shapes
+    ├── test_io_layer.py
+    ├── test_axes.py
+    ├── test_summary.py
+    └── test_report.py
 ```
 
 ---
@@ -166,6 +195,9 @@ pathfinder_output/
 ```
 
 **HTML tabs**: Summary · Overview · Meta-GO · Exploration · Protein UMAP · Publications
+
+Every figure carries **SVG** and **PNG** export buttons (hover over it): vector SVG for
+Illustrator/Inkscape, 2× PNG for slides. Filenames are derived from the figure title.
 
 **Excel sheets**: provenance · Summary · MetaGO_matrix · MetaGO_directionality ·
 Contrast_similarity · PCA_scores · PCA_loadings · PC_factor_assoc · PC_factor_multi ·
@@ -199,8 +231,16 @@ consider `limma::removeBatchEffect`, ComBat, or adding it as a covariate.
 Without replicates the test is reported as *not computable* rather than
 misinterpreted.
 
-**QC correlation** is computed on raw intensities when available: per-protein
-z-scores are decorrelated by construction and would flag every sample as an outlier.
+**Matrix selection.** Every sheet is profiled and the best per-sample matrix is used
+for the PCA: columns matching the design first, then raw (non z-scored) log2
+intensities, then protein count. A z-scored heatmap is usually a *selected* subset
+(significant or most-variable proteins), and running the PCA on it is circular — it
+inflates both the variance explained and the effect sizes. When no raw matrix is
+available Pathfinder still runs, but says so and flags the magnitudes as unreliable.
+
+**QC correlation** follows the same matrix: per-protein z-scores are decorrelated by
+construction (absolute r is meaningless, only relative structure is), so the colour
+scale adapts and the outlier rule switches to a robust, relative criterion.
 
 **UMAP guard-rail.** Sample-level UMAP requires `n ≥ 4 × n_conditions`; below
 that it fabricates convincing but arbitrary clusters, so PCA remains the

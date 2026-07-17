@@ -31,6 +31,10 @@ def build_matrix(go_long: pd.DataFrame, p_thr: float = 0.05):
     )
 
     matrix = df.pivot_table(index="key", columns="contrast", values="cell", aggfunc="mean")
+    # keep contrasts that were read but hold no significant term: an all-NaN column is
+    # honest ("tested, nothing passed"), whereas dropping it looks like a missing sheet.
+    all_contrasts = list(dict.fromkeys(df["contrast"].dropna().tolist()))
+    matrix = matrix.reindex(columns=all_contrasts)
 
     meta = (df.sort_values("p_value")
               .drop_duplicates("key")
@@ -128,6 +132,27 @@ def redundancy_clusters(go_long: pd.DataFrame, matrix: pd.DataFrame, meta: pd.Da
     return meta
 
 
+def _pair_relation(c1, c2):
+    """Describe how two contrasts share conditions — shared references create
+    mechanical correlation (same reference) or anti-correlation (flipped role),
+    which must not be read as biology."""
+    s1, s2 = str(c1), str(c2)
+    if "_vs_" not in s1 or "_vs_" not in s2:
+        return "disjoint", ""
+    a1, b1 = s1.split("_vs_", 1)
+    a2, b2 = s2.split("_vs_", 1)
+    shared = {a1, b1} & {a2, b2}
+    if not shared:
+        return "disjoint", ""
+    if len(shared) == 2:
+        return "same pair", "same two conditions"
+    cond = shared.pop()
+    same_side = (cond == a1 and cond == a2) or (cond == b1 and cond == b2)
+    if same_side:
+        return "shared reference", f"both compare against {cond} on the same side"
+    return "flipped reference", f"{cond} is on opposite sides"
+
+
 def contrast_similarity(matrix: pd.DataFrame, min_shared: int = 3):
     """Cluster contrasts by their GO signature.
 
@@ -164,7 +189,11 @@ def contrast_similarity(matrix: pd.DataFrame, min_shared: int = 3):
         except Exception:
             pass
     labels = [cols[i] for i in order]
-    return corr.loc[labels, labels], labels, shared.loc[labels, labels]
+    rel = pd.DataFrame("", index=labels, columns=labels, dtype=object)
+    for a in labels:
+        for b in labels:
+            rel.loc[a, b] = _pair_relation(a, b)[0] if a != b else "self"
+    return corr.loc[labels, labels], labels, shared.loc[labels, labels], rel
 
 
 def run(go_long: pd.DataFrame, p_thr: float = 0.05, jaccard_cut: float = 0.5):
@@ -183,7 +212,8 @@ def run(go_long: pd.DataFrame, p_thr: float = 0.05, jaccard_cut: float = 0.5):
             s.update(lst)
         term_genes[key] = s
     # contrast clustering on the GO signature
-    ccorr, corder, cshared = contrast_similarity(matrix)
+    ccorr, corder, cshared, crel = contrast_similarity(matrix)
     return {"matrix": matrix, "meta": meta, "directionality": direction,
             "term_genes": term_genes, "contrast_corr": ccorr,
-            "contrast_order": corder, "contrast_shared": cshared}
+            "contrast_order": corder, "contrast_shared": cshared,
+            "contrast_relation": crel}

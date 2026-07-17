@@ -74,11 +74,11 @@ def svg_meta_heatmap(matrix: pd.DataFrame, meta: pd.DataFrame, max_terms=40, uid
     names = [meta.loc[k, "term_name"] for k in m.index]
     contrasts = list(m.columns)
     vmax = np.nanmax(np.abs(m.values)) or 1.0
-    cw, ch = 46, 20
+    cw, ch = 54, 24
     left, top = 360, 150
     W = left + len(contrasts) * cw + 30
     H = top + len(m) * ch + 42
-    s = [f"<svg viewBox='0 0 {W} {H}' width='100%' style='max-width:{W}px'>"]
+    s = [f"<svg viewBox='0 0 {W} {H}' width='{W}' height='{H}' style='max-width:100%;height:auto'>"]
     for j, c in enumerate(contrasts):
         x = left + j * cw + cw / 2
         s.append(f"<text x='{x}' y='{top-8}' fill='{MUT}' font-size='9' "
@@ -99,7 +99,7 @@ def svg_meta_heatmap(matrix: pd.DataFrame, meta: pd.DataFrame, max_terms=40, uid
     return "".join(s)
 
 
-def svg_scatter(df, xcol, ycol, cat_col, title_x, title_y, size=(520, 420)):
+def svg_scatter(df, xcol, ycol, cat_col, title_x, title_y, size=(680, 540)):
     W, Hh = size
     xs = df[xcol].astype(float).values
     ys = df[ycol].astype(float).values
@@ -123,7 +123,7 @@ def svg_scatter(df, xcol, ycol, cat_col, title_x, title_y, size=(520, 420)):
     def px(x): return pad + (x - xmin) / (xmax - xmin) * (W - pad - right)
     def py(y): return Hh - pad - (y - ymin) / (ymax - ymin) * (Hh - 2 * pad)
 
-    s = [f"<svg viewBox='0 0 {W} {Hh}' width='100%' style='max-width:{W}px'>"]
+    s = [f"<svg viewBox='0 0 {W} {Hh}' width='{W}' height='{Hh}' style='max-width:100%;height:auto'>"]
     s.append(f"<rect x='0' y='0' width='{W}' height='{Hh}' fill='{PANEL}' rx='6'/>")
     # axes 0
     if xmin < 0 < xmax:
@@ -151,7 +151,7 @@ def svg_scatter(df, xcol, ycol, cat_col, title_x, title_y, size=(520, 420)):
     return "".join(s)
 
 
-def svg_scatter_value(df, xcol, ycol, valcol, diverging, size=(560, 440), r=3):
+def svg_scatter_value(df, xcol, ycol, valcol, diverging, size=(720, 560), r=3):
     W, Hh = size
     xs = df[xcol].astype(float).values; ys = df[ycol].astype(float).values
     vals = pd.to_numeric(df[valcol], errors="coerce").values
@@ -174,7 +174,7 @@ def svg_scatter_value(df, xcol, ycol, valcol, diverging, size=(560, 440), r=3):
             t = max(0.0, min(1.0, (v - lo) / rng))
             r_, g_, b_ = int(30 + t * 30), int(60 + t * 150), int(120 + t * 80)
             return f"rgb({r_},{g_},{b_})"
-    s = [f"<svg viewBox='0 0 {W} {Hh}' width='100%' style='max-width:{W}px'>",
+    s = [f"<svg viewBox='0 0 {W} {Hh}' width='{W}' height='{Hh}' style='max-width:100%;height:auto'>",
          f"<rect x='0' y='0' width='{W}' height='{Hh}' fill='{PANEL}' rx='6'/>"]
     for x, y, v in zip(xs, ys, vals):
         s.append(f"<circle cx='{px(x):.1f}' cy='{py(y):.1f}' r='{r}' fill='{color(v)}' fill-opacity='0.8'/>")
@@ -192,7 +192,7 @@ def svg_scatter_colored(df, xcol, ycol, colors, legend, size=(560, 440), r=3):
     xr = (xmax - xmin) or 1; yr = (ymax - ymin) or 1
     def px(x): return pad + (x - xmin) / xr * (W - 2 * pad)
     def py(y): return Hh - pad - (y - ymin) / yr * (Hh - 2 * pad)
-    s = [f"<svg viewBox='0 0 {W} {Hh}' width='100%' style='max-width:{W}px'>",
+    s = [f"<svg viewBox='0 0 {W} {Hh}' width='{W}' height='{Hh}' style='max-width:100%;height:auto'>",
          f"<rect x='0' y='0' width='{W}' height='{Hh}' fill='{PANEL}' rx='6'/>"]
     # grey points first, coloured on top
     order = np.argsort([0 if c == "#30363d" else 1 for c in colors])
@@ -252,7 +252,7 @@ def _go_umap_widget(udf, meta, term_genes, max_terms=24):
   <label>Terms <select id='go_k'><option>4</option><option selected>8</option><option>12</option><option>16</option><option>24</option></select></label>
   <span id='go_info' class='mut'></span>
 </div>
-<canvas id='go_cv' width='1120' height='880' style='width:100%;max-width:560px;height:auto;background:#161b22;border-radius:6px'></canvas>
+<canvas id='go_cv' width='1520' height='1160' style='width:100%;max-width:560px;height:auto;background:#161b22;border-radius:6px'></canvas>
 <div id='go_leg' class='golegend'></div>
 <script>
 (function(){
@@ -261,7 +261,7 @@ def _go_umap_widget(udf, meta, term_genes, max_terms=24):
  var xs=C.map(function(p){return p[0];}), ys=C.map(function(p){return p[1];});
  var xmin=Math.min.apply(null,xs), xmax=Math.max.apply(null,xs);
  var ymin=Math.min.apply(null,ys), ymax=Math.max.apply(null,ys);
- var W=560,H=440,pad=30; ctx.scale(2,2);
+ var W=760,H=580,pad=34; ctx.scale(2,2);
  function px(x){return pad+(x-xmin)/((xmax-xmin)||1)*(W-2*pad);}
  function py(y){return H-pad-(y-ymin)/((ymax-ymin)||1)*(H-2*pad);}
  function selectedTerms(){
@@ -298,10 +298,10 @@ import re  # noqa: E402 (used by the GO widget)
 
 def svg_scree(var_exp):
     ve = [float(v) for v in var_exp]
-    W, Hh = 520, 240; pad = 40
+    W, Hh = 660, 300; pad = 44
     n = len(ve); bw = (W - 2 * pad) / max(n, 1)
     vmax = max(ve) or 1
-    s = [f"<svg viewBox='0 0 {W} {Hh}' width='100%' style='max-width:{W}px'>",
+    s = [f"<svg viewBox='0 0 {W} {Hh}' width='{W}' height='{Hh}' style='max-width:100%;height:auto'>",
          f"<rect x='0' y='0' width='{W}' height='{Hh}' fill='{PANEL}' rx='6'/>"]
     cum = 0
     for i, v in enumerate(ve):
@@ -316,18 +316,18 @@ def svg_scree(var_exp):
     return "".join(s)
 
 
-def svg_contrast_corr(corr: pd.DataFrame, shared: pd.DataFrame):
+def svg_contrast_corr(corr: pd.DataFrame, shared: pd.DataFrame, relation=None):
     """contrast x contrast similarity heatmap (diverging, hierarchical order)."""
     labels = list(corr.columns)
     n = len(labels)
     if n < 2:
         return ""
-    cell = min(26, max(9, int(520 / n)))
+    cell = min(30, max(12, int(900 / n)))
     lab_w = min(190, 8 + max(len(str(l)) for l in labels) * 5)
     left, top = lab_w, lab_w
     W = left + n * cell + 24
     H = top + n * cell + 44
-    s = [f"<svg viewBox='0 0 {W} {H}' width='100%' style='max-width:{W}px'>"]
+    s = [f"<svg viewBox='0 0 {W} {H}' width='{W}' height='{H}' style='max-width:100%;height:auto'>"]
     for i, li in enumerate(labels):
         s.append(f"<text x='{left-6}' y='{top+i*cell+cell*0.72}' fill='{FG}' font-size='9' "
                  f"text-anchor='end'>{_esc(li)}</text>")
@@ -344,9 +344,17 @@ def svg_contrast_corr(corr: pd.DataFrame, shared: pd.DataFrame):
                 fill = "#1c2128"
             else:
                 fill = _diverging(float(v), 1.0)
+            rl = ""
+            if relation is not None and i != j:
+                try:
+                    rr = str(relation.loc[li, lj])
+                    if rr and rr != "disjoint":
+                        rl = f" · {rr.upper()} (mechanical)"
+                except Exception:
+                    rl = ""
             tip = (f"{_esc(li)} / {_esc(lj)} : "
                    + ("r=n/a" if pd.isna(v) else f"r={float(v):+.2f}")
-                   + f" · {sh} shared terms")
+                   + f" · {sh} shared terms{rl}")
             s.append(f"<rect x='{left+j*cell}' y='{top+i*cell}' width='{cell-1}' height='{cell-1}' "
                      f"fill='{fill}'><title>{tip}</title></rect>")
     s.append(_colorbar(left, H - 28, 1.0, width=150, uid="cbctr"))
@@ -355,7 +363,7 @@ def svg_contrast_corr(corr: pd.DataFrame, shared: pd.DataFrame):
 
 def svg_corr(corr: pd.DataFrame):
     labels = list(corr.columns)
-    n = len(labels); cell = min(28, max(10, int(560 / max(n, 1))))
+    n = len(labels); cell = min(32, max(12, int(760 / max(n, 1))))
     left, top = 130, 130
     W = left + n * cell + 20; H = top + n * cell + 46
     V = corr.values.astype(float)
@@ -376,7 +384,7 @@ def svg_corr(corr: pd.DataFrame):
         t = max(0.0, min(1.0, (v - lo) / (hi - lo)))     # sequential green
         return f"rgb({int(28 + t*20)},{int(45 + t*175)},{int(58 + t*40)})"
 
-    s = [f"<svg viewBox='0 0 {W} {H}' width='100%' style='max-width:{W}px'>"]
+    s = [f"<svg viewBox='0 0 {W} {H}' width='{W}' height='{H}' style='max-width:100%;height:auto'>"]
     for i, ri in enumerate(labels):
         s.append(f"<text x='{left-6}' y='{top+i*cell+cell*0.7}' fill='{FG}' font-size='9' text-anchor='end'>{_esc(ri)}</text>")
         x = left + i * cell + cell / 2
@@ -439,6 +447,129 @@ def _resume_html(resume):
     return "".join(blocks)
 
 
+EXPORT_JS = """
+(function(){
+  var BG = '#0d1117';
+  function slug(s){ return (s||'figure').toString().trim().toLowerCase()
+      .replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,60) || 'figure'; }
+  function headText(h){
+    var c = h.cloneNode(true);
+    c.querySelectorAll('.mut').forEach(function(e){ e.remove(); });   // drop the counters
+    return c.textContent;
+  }
+  function figName(el){
+    var node = el, base = null;
+    for(var up = 0; up < 5 && node; up++){
+      var n = node.previousElementSibling, guard = 0;
+      while(n && guard++ < 10){
+        if(/^H[23]$/.test(n.tagName)){ base = slug(headText(n)); break; }
+        n = n.previousElementSibling;
+      }
+      if(base) break;
+      if(node.tagName === 'SECTION') break;
+      node = node.parentElement;
+    }
+    if(!base){
+      var sec = el.closest('section');
+      base = slug(sec && sec.dataset.name ? sec.dataset.name : 'figure');
+    }
+    var view = el.closest('.hm-rep') ? '_non_redundant' : (el.closest('.hm-all') ? '_all_terms' : '');
+    return base + view;
+  }
+  function dl(href, name){
+    var a = document.createElement('a'); a.href = href; a.download = name;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  }
+  function svgString(svg){
+    var c = svg.cloneNode(true);
+    var vb = (svg.getAttribute('viewBox')||'').split(/\\s+/);
+    var w = vb.length===4 ? +vb[2] : (svg.clientWidth||800);
+    var h = vb.length===4 ? +vb[3] : (svg.clientHeight||600);
+    // the inline style carries 'height:auto', which resolves to 0 once the SVG is
+    // serialised as a standalone document: drop it before fixing explicit sizes.
+    c.removeAttribute('style');
+    c.setAttribute('width', w); c.setAttribute('height', h);
+    var bg = document.createElementNS('http://www.w3.org/2000/svg','rect');
+    bg.setAttribute('x',0); bg.setAttribute('y',0);
+    bg.setAttribute('width',w); bg.setAttribute('height',h); bg.setAttribute('fill',BG);
+    c.insertBefore(bg, c.firstChild);
+    // XMLSerializer emits the SVG namespace itself; declaring it by hand would
+    // produce a duplicate xmlns attribute and an unparseable document.
+    var txt = new XMLSerializer().serializeToString(c);
+    if (txt.indexOf('xmlns=') === -1){
+      txt = txt.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+    }
+    return {txt:'<?xml version="1.0" encoding="UTF-8"?>\\n'+txt, w:w, h:h};
+  }
+  function exportSVG(svg, name){
+    var o = svgString(svg);
+    var blob = new Blob([o.txt], {type:'image/svg+xml;charset=utf-8'});
+    var url = URL.createObjectURL(blob);
+    dl(url, name+'.svg'); setTimeout(function(){URL.revokeObjectURL(url);}, 4000);
+  }
+  function svgDataUrl(txt){
+    // data: URL, not blob: — a blob URL has a null origin when the report is opened
+    // from file://, which taints the canvas and makes toDataURL throw.
+    return 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(txt)));
+  }
+  function exportPNG(svg, name, scale){
+    var o = svgString(svg); scale = scale || 2;
+    var img = new Image();
+    img.onload = function(){
+      try {
+        var cv = document.createElement('canvas');
+        cv.width = Math.round(o.w * scale); cv.height = Math.round(o.h * scale);
+        var ctx = cv.getContext('2d');
+        ctx.fillStyle = BG; ctx.fillRect(0, 0, cv.width, cv.height);
+        ctx.drawImage(img, 0, 0, cv.width, cv.height);
+        dl(cv.toDataURL('image/png'), name + '.png');
+      } catch(err){
+        alert('PNG export blocked by the browser (' + err.name + '). Use the SVG button — '
+              + 'it opens in Illustrator, Inkscape or any browser.');
+      }
+    };
+    img.onerror = function(){
+      alert('PNG export failed while rendering the figure. Use the SVG button instead.');
+    };
+    img.src = svgDataUrl(o.txt);
+  }
+  function canvasPNG(cv, name){
+    var out = document.createElement('canvas');
+    out.width = cv.width; out.height = cv.height;
+    var ctx = out.getContext('2d');
+    ctx.fillStyle = BG; ctx.fillRect(0,0,out.width,out.height);
+    ctx.drawImage(cv, 0, 0);
+    dl(out.toDataURL('image/png'), name+'.png');
+  }
+  function addBtns(el, isCanvas){
+    if(el.parentElement && el.parentElement.classList.contains('figwrap')) return;
+    var wrap = document.createElement('div'); wrap.className = 'figwrap';
+    el.parentNode.insertBefore(wrap, el); wrap.appendChild(el);
+    var bar = document.createElement('div'); bar.className = 'figbtns';
+    var name = 'pathfinder_' + figName(wrap);
+    if(!isCanvas){
+      var b1 = document.createElement('button'); b1.className='figbtn'; b1.textContent='SVG';
+      b1.title='Download as vector SVG';
+      b1.onclick = function(e){ e.stopPropagation(); exportSVG(el, name); };
+      bar.appendChild(b1);
+    }
+    var b2 = document.createElement('button'); b2.className='figbtn'; b2.textContent='PNG';
+    b2.title='Download as PNG (2x)';
+    b2.onclick = function(e){ e.stopPropagation();
+      isCanvas ? canvasPNG(el, name) : exportPNG(el, name, 2); };
+    bar.appendChild(b2);
+    wrap.appendChild(bar);
+  }
+  function init(){
+    document.querySelectorAll('main svg').forEach(function(s){ addBtns(s, false); });
+    document.querySelectorAll('main canvas').forEach(function(c){ addBtns(c, true); });
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
+"""
+
+
 def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, branding=None, pubs=None):
     b = {"title": "Pathfinder",
          "subtitle": "Pathway And Term Harmonisation For INtegrated Design Exploration & Reporting",
@@ -477,18 +608,53 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
         parts = [ctl]
         ccorr = meta_go.get("contrast_corr")
         if ccorr is not None and not ccorr.empty and ccorr.shape[0] >= 2:
-            cc = svg_contrast_corr(ccorr, meta_go.get("contrast_shared"))
+            cc = svg_contrast_corr(ccorr, meta_go.get("contrast_shared"), meta_go.get("contrast_relation"))
             if cc:
                 off = ccorr.where(~np.eye(ccorr.shape[0], dtype=bool)).stack().dropna()
+                rel = meta_go.get("contrast_relation")
                 extra = ""
                 if len(off):
-                    top_pair = off.idxmax(); top_v = off.max()
-                    neg = off.min(); neg_pair = off.idxmin()
-                    extra = (f" Most similar: <b>{_esc(top_pair[0])}</b> ↔ <b>{_esc(top_pair[1])}</b> "
-                             f"(r={top_v:+.2f}).")
-                    if neg < -0.3:
-                        extra += (f" Most opposed: <b>{_esc(neg_pair[0])}</b> ↔ "
-                                  f"<b>{_esc(neg_pair[1])}</b> (r={neg:+.2f}).")
+                    if rel is not None:
+                        disj = off[[rel.loc[a, b] == "disjoint" for a, b in off.index]]
+                    else:
+                        disj = off
+                    R_MIN, N_MIN = 0.3, 10
+                    shm = meta_go.get("contrast_shared")
+                    n_thin = 0
+                    if shm is not None and len(disj):
+                        enough = [int(shm.loc[a, b]) >= N_MIN for a, b in disj.index]
+                        n_thin = len(disj) - sum(enough)
+                        disj = disj[enough]
+
+                    def _nsh(a, b):
+                        return int(shm.loc[a, b]) if shm is not None else 0
+
+                    if len(disj):
+                        tp = disj.idxmax(); tv = disj.max()
+                        np_ = disj.idxmin(); nv = disj.min()
+                        if tv >= R_MIN:
+                            extra = (f" Most similar independent pair: <b>{_esc(tp[0])}</b> ↔ "
+                                     f"<b>{_esc(tp[1])}</b> (r={tv:+.2f}, {_nsh(*tp)} shared terms).")
+                        if nv <= -R_MIN:
+                            extra += (f" Most opposed: <b>{_esc(np_[0])}</b> ↔ "
+                                      f"<b>{_esc(np_[1])}</b> (r={nv:+.2f}, {_nsh(*np_)} shared terms).")
+                        if tv < R_MIN and nv > -R_MIN:
+                            extra = (f" No independent pair reaches |r| ≥ {R_MIN}: signatures are "
+                                     "largely unrelated.")
+                    else:
+                        extra = (f" No pair is both independent and based on ≥ {N_MIN} shared terms.")
+                    n_sh = int(sum(1 for a_, b_ in off.index if rel is not None
+                                   and rel.loc[a_, b_] != "disjoint"))
+                    caveats = []
+                    if n_sh:
+                        caveats.append(f"{n_sh}/{len(off)} pairs share a condition (a common "
+                                       "reference inflates r, a reversed one inflates −r, "
+                                       "regardless of biology — hover a cell to see the relation)")
+                    if n_thin:
+                        caveats.append(f"{n_thin} pair(s) rest on fewer than {N_MIN} shared terms, "
+                                       "where correlation is unstable")
+                    if caveats:
+                        extra += (" <b>Excluded from the highlights:</b> " + "; ".join(caveats) + ".")
                 parts.append(
                     "<h3>Contrast clustering <span class='mut'>· by GO signature</span></h3>" + cc +
                     "<p class='mut'>Pearson correlation between the signed z-score profiles of two "
@@ -543,7 +709,8 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
     load = pca["loadings"]
     load_tbl = ""
     if "PC1" in load.columns:
-        top = load.reindex(load["PC1"].abs().sort_values(ascending=False).index).head(15)
+        # positional sort: gene symbols repeat, and reindexing on duplicates raises
+        top = load.iloc[np.argsort(-load["PC1"].abs().to_numpy())].head(15)
         load_tbl = _table(top[["PC1"] + [c for c in ["PC2", "PC3"] if c in top.columns]].reset_index()
                           .rename(columns={"index": "protein"}), max_rows=15)
     # empty association (design unresolved) -> note instead of an empty table
@@ -625,9 +792,16 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
 
     # Publications (online axis) - tab added only when present
     if pubs is not None and any(pubs.get("results", {}).values()):
+        crit = pubs.get("provenance", {}).get("_criterion", "")
+        skip = pubs.get("provenance", {}).get("_skipped", "")
         pub_parts = ["<p class='mut'>Papers over-represented in each contrast signature (STRING "
                      "PMID enrichment, ranked by FDR). Known bias: heavily studied proteins surface "
                      "more readily — cross-check against the LFC.</p>"]
+        if crit:
+            pub_parts.append(f"<p class='mut'><b>Criterion:</b> {_esc(crit)}."
+                             + (f" {_esc(skip)}." if skip else "")
+                             + " Contrasts with fewer than 5 significant proteins are skipped: "
+                               "enrichment is a statement about a set, not about one gene.</p>")
         for c, rows in pubs["results"].items():
             if not rows:
                 continue
@@ -645,7 +819,7 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
     nav = "".join(f"<button class='tab{' active' if i==0 else ''}' onclick=\"show({i})\">{_esc(t)}</button>"
                   for i, t in enumerate(tabs))
     sections = "".join(
-        f"<section id='sec-{i}' class='panel' style='display:{'block' if i==0 else 'none'}'>{panels[t]}</section>"
+        f"<section id='sec-{i}' data-name='{_esc(t)}' class='panel' style='display:{'block' if i==0 else 'none'}'>{panels[t]}</section>"
         for i, t in enumerate(tabs))
 
     doc = f"""<!doctype html><html lang='en'><head><meta charset='utf-8'>
@@ -665,7 +839,7 @@ header .brand .a{{font-size:11px;color:{BLUE}}}
 nav{{display:flex;gap:6px;padding:10px 24px;border-bottom:1px solid {GRID};flex-wrap:wrap}}
 .tab{{background:{PANEL};color:{FG};border:1px solid {GRID};border-radius:6px;padding:7px 14px;cursor:pointer;font-size:13px}}
 .tab.active{{background:{BLUE};border-color:{BLUE};color:#fff}}
-main{{padding:20px 24px;max-width:1200px}}
+main{{padding:20px 24px;max-width:1500px}}
 h3{{color:#fff;font-size:14px;margin:22px 0 8px;font-weight:600}}
 .cards{{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px}}
 .kpi{{background:{PANEL};border:1px solid {GRID};border-radius:8px;padding:14px 18px;min-width:120px}}
@@ -684,6 +858,12 @@ code{{background:{PANEL};padding:1px 5px;border-radius:4px;color:{PURP}}}
 .golegend{{display:flex;flex-wrap:wrap;gap:6px 16px;margin:8px 0 4px;font-size:11px;color:{FG}}}
 .golegend .legit{{display:flex;align-items:center;gap:5px}}
 .golegend .sw{{width:10px;height:10px;border-radius:2px;display:inline-block}}
+.figwrap{{position:relative;display:block;width:fit-content;max-width:100%;margin:2px 0}}
+.figbtns{{position:absolute;top:4px;right:4px;display:flex;gap:4px;opacity:0;transition:opacity .15s}}
+.figwrap:hover .figbtns{{opacity:1}}
+.figbtn{{background:{PANEL};color:{FG};border:1px solid {GRID};border-radius:4px;
+ padding:2px 7px;font-size:10px;cursor:pointer;line-height:1.5}}
+.figbtn:hover{{background:{BLUE};border-color:{BLUE};color:#fff}}
 </style></head><body>
 <header>{(f"<span class='logo'>{b['icon_svg']}</span>" if b.get('icon_svg') else (f"<img class='logo' src='data:image/png;base64,{b['icon_b64']}' alt=''/>" if b['icon_b64'] else ""))}<div class='brand'><span class='t'>{_esc(b['title'])}</span><span class='s'>{_esc(b['subtitle'])}</span><span class='a'>{_esc(b['affiliation'])}</span></div></header>
 <nav>{nav}</nav>
@@ -693,7 +873,9 @@ function show(i){{document.querySelectorAll('.panel').forEach(p=>p.style.display
  document.getElementById('sec-'+i).style.display='block';
  document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
  event.target.classList.add('active');}}
-</script></body></html>"""
+</script>
+<script>{EXPORT_JS}</script>
+</body></html>"""
     with open(path, "w", encoding="utf-8") as f:
         f.write(doc)
     return path

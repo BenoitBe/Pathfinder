@@ -86,7 +86,7 @@ def prompt_species(default=None):
     """Ask the user for the species. Returns the raw answer, '' to skip, None if not a TTY."""
     if not (sys.stdin and sys.stdin.isatty()):
         return None
-    examples = "hsapiens, mmusculus, rnorvegicus, drerio... or an NCBI taxid"
+    examples = "hsapiens, 'Brassica napus', 'camelina'... or an NCBI taxid"
     if default:
         msg = (f"\n[Pathfinder] Publications axis (STRING) — species detected: {default}\n"
                f"             Press Enter to accept, type another ({examples}), "
@@ -101,6 +101,105 @@ def prompt_species(default=None):
     if ans.lower() in ("n", "no", "skip"):
         return ""
     return ans or (default or "")
+
+
+STRING_SPECIES_URL = "https://stringdb-downloads.org/download/species.v12.0.txt"
+
+
+def _species_cache_path():
+    import os
+    from pathlib import Path
+    d = Path(os.environ.get("PATHFINDER_CACHE", Path.home() / ".pathfinder_cache"))
+    return d / "string_species.tsv"
+
+
+def fetch_string_species(timeout=30):
+    """STRING's own species table (cached on disk). Returns [(taxid, name), ...].
+
+    Resolving against STRING rather than a hard-coded list has two virtues: it covers
+    every species STRING knows, and it proves upfront that the Publications axis can
+    actually run for that organism.
+    """
+    p = _species_cache_path()
+    if p.exists():
+        try:
+            text = p.read_text(encoding="utf-8")
+        except Exception:
+            text = ""
+    else:
+        text = ""
+    if not text:
+        import requests
+        r = requests.get(STRING_SPECIES_URL, timeout=timeout)
+        r.raise_for_status()
+        text = r.text
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text, encoding="utf-8")
+        except Exception:
+            pass
+    out = []
+    for line in text.splitlines()[1:]:
+        f = line.split("\t")
+        if len(f) >= 4 and f[0].strip().isdigit():
+            out.append((int(f[0]), f[3].strip()))       # official NCBI name
+    return out
+
+
+def lookup_species(query, species=None):
+    """Find candidate species for a free-text query. Returns [(taxid, name), ...].
+
+    Accepts 'Cannabis sativa', 'cannabis', or the gProfiler-style 'csativa' — which is
+    ambiguous on purpose (Cannabis / Camelina / Castanea sativa), so every candidate is
+    returned and the caller asks rather than guessing.
+    """
+    if species is None:
+        species = fetch_string_species()
+    q = str(query).strip().lower()
+    nq = re.sub(r"[^a-z]", "", q)
+    exact, partial = [], []
+    for taxid, name in species:
+        nl = name.lower()
+        nn = re.sub(r"[^a-z]", "", nl)
+        if nq == nn or q == nl:
+            exact.append((taxid, name))
+            continue
+        parts = nl.split()
+        # gProfiler style: first letter of the genus + full species epithet
+        if len(parts) >= 2 and nq == (parts[0][0] + re.sub(r"[^a-z]", "", parts[1])):
+            partial.append((taxid, name))
+        elif nq and nq in nn:
+            partial.append((taxid, name))
+    return exact or partial
+
+
+def choose_candidate(candidates):
+    """Pick among species matching an ambiguous query. Returns a taxid or None.
+
+    'csativa' fits Cannabis, Camelina and Castanea sativa: ask rather than guess.
+    """
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        taxid, name = candidates[0]
+        print(f"[Pathfinder] species resolved: {name} (taxid {taxid})")
+        return taxid
+    if not (sys.stdin and sys.stdin.isatty()):
+        print(f"[Pathfinder] \u26a0 ambiguous species ({len(candidates)} matches) and no "
+              "terminal to ask: pass an NCBI taxid with --org.")
+        return None
+    print("\n[Pathfinder] Several species match - which one?")
+    for i, (taxid, name) in enumerate(candidates[:10], 1):
+        print(f"    {i}. {name}  (taxid {taxid})")
+    try:
+        ans = input("             Number, or Enter to skip: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+    if ans.isdigit() and 1 <= int(ans) <= min(len(candidates), 10):
+        taxid, name = candidates[int(ans) - 1]
+        print(f"[Pathfinder] species resolved: {name} (taxid {taxid})")
+        return taxid
+    return None
 
 
 def resolve_species(org_arg=None, excel_org=None):

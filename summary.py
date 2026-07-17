@@ -15,6 +15,9 @@ EFF_LARGE, EFF_MED = 0.14, 0.06
 # BH-adjusted significance threshold, shared by the design and multi-factor sections
 # (FDR 10%: PCs are numerous and correlated, and this is exploratory QC, not inference)
 P_ADJ_THR = 0.10
+# A correlation drop only matters if it is material, not merely statistical: with a
+# tight replicate distribution, 3*MAD can flag a 0.02 difference.
+QC_MIN_GAP = 0.05
 
 SRC_ORDER = ["GO:BP", "GO:MF", "GO:CC", "KEGG", "REAC"]
 SRC_LABEL = {"GO:BP": "GO:BP (biological process)", "GO:MF": "GO:MF (molecular function)",
@@ -67,9 +70,19 @@ def _design_section(explore):
 
     if captured:
         parts = [f"{pc} ({var:.0f}% var., ε²={eps2:.2f}, p={_fmt_p(p)})" for pc, var, eps2, p in captured]
+        best_p = min(p for _, _, _, p in captured)
         strong = any(e >= EFF_LARGE for _, _, e, _ in captured)
-        lines.append(f"Condition structures the variance on {', '.join(parts)} — "
-                     f"group separation is {'clear' if strong else 'moderate'}.")
+        if best_p < 0.05 and strong:
+            verdict = "group separation is clear"
+        elif best_p < 0.05:
+            verdict = "group separation is moderate"
+        else:
+            # effect size can be large while the test misses significance: few
+            # replicates per group leave little power, especially with many groups.
+            verdict = (f"the effect is large but does not reach significance after "
+                       f"correction (best p={_fmt_p(best_p)}, {min_n} replicates per group "
+                       f"for {k} groups): treat it as a consistent trend, not a proof")
+        lines.append(f"Condition structures the variance on {', '.join(parts)} — {verdict}.")
     else:
         lines.append("No PC is significantly associated with condition: weak group separation, "
                      "or variance dominated by other factors.")
@@ -117,9 +130,12 @@ def _qc_section(explore, cond_map):
     mad = float(np.median(np.abs(v - med))) * 1.4826
     lines, outliers = [], []
     for s, r in vals.items():
-        # robust rule (works on z-scored data, where absolute r is low by construction)
-        rel = mad > 1e-9 and r < med - 3 * mad
-        absolute = (not zscored) and r < 0.90
+        # A tight distribution makes 3*MAD tiny, so the robust rule alone flags noise:
+        # require the gap to be material too, and keep the classic absolute rule on
+        # raw intensities (replicates below r=0.90 are genuinely worth a look).
+        material = (med - r) >= QC_MIN_GAP
+        rel = mad > 1e-9 and r < med - 3 * mad and material
+        absolute = (not zscored) and r < 0.90 and material
         if rel or absolute:
             outliers.append((s, cond_map.get(s), r))
     if outliers:
@@ -187,26 +203,78 @@ def _contrast_section(meta_go):
     matrix = meta_go["matrix"]
     if matrix.empty:
         return []
+    R_MIN = 0.3          # below this, correlation is not worth a claim
+    N_MIN = 10           # a correlation over a handful of terms is noise, not signal
     lines = []
     cc = meta_go.get("contrast_corr")
+    rel = meta_go.get("contrast_relation")
+    sh = meta_go.get("contrast_shared")
     if cc is not None and not cc.empty and cc.shape[0] >= 2:
         off = cc.where(~np.eye(cc.shape[0], dtype=bool)).stack().dropna()
         if len(off):
-            a, b = off.idxmax()
-            lines.append(f"Closest contrasts by GO signature: {a} and {b} (r={off.max():+.2f}) — "
-                         "they move the same functions in the same direction.")
-            na, nb = off.idxmin()
-            if off.min() < -0.3:
-                lines.append(f"Most opposed contrasts: {na} and {nb} (r={off.min():+.2f}) — "
-                             "shared functions regulated in opposite directions.")
+            # only pairs sharing no condition are biologically interpretable: a common
+            # reference inflates r, a reversed one inflates -r, regardless of biology.
+            if rel is not None:
+                keep = [rel.loc[a, b] == "disjoint" for a, b in off.index]
+                disj = off[keep]
+                n_shared_cond = len(off) - len(disj)
+            else:
+                disj, n_shared_cond = off, 0
+
+            # and only pairs with enough shared terms are worth a headline
+            n_thin = 0
+            if sh is not None and len(disj):
+                enough = [int(sh.loc[a, b]) >= N_MIN for a, b in disj.index]
+                n_thin = len(disj) - sum(enough)
+                disj = disj[enough]
+
+            def _n(a, b):
+                return int(sh.loc[a, b]) if sh is not None else 0
+
+            if len(disj):
+                a, b = disj.idxmax()
+                if disj.max() >= R_MIN:
+                    lines.append(f"Closest independent contrasts: {a} and {b} "
+                                 f"(r={disj.max():+.2f} over {_n(a, b)} shared terms) — "
+                                 "they move the same functions in the same direction.")
+                na, nb = disj.idxmin()
+                if disj.min() <= -R_MIN:
+                    lines.append(f"Most opposed independent contrasts: {na} and {nb} "
+                                 f"(r={disj.min():+.2f} over {_n(na, nb)} shared terms) — "
+                                 "shared functions regulated in opposite directions.")
+                if disj.max() < R_MIN and disj.min() > -R_MIN:
+                    lines.append(f"No clear relationship between independent contrasts "
+                                 f"(all |r| < {R_MIN}): their GO signatures are largely unrelated.")
+            else:
+                lines.append(f"No contrast pair is both independent and based on at least {N_MIN} "
+                             "shared terms — no reliable relationship can be reported.")
+            notes = []
+            if n_shared_cond:
+                notes.append(f"{n_shared_cond}/{len(off)} pairs share a condition (a common "
+                             "reference mechanically inflates correlation, a reversed one inflates "
+                             "anti-correlation)")
+            if n_thin:
+                notes.append(f"{n_thin} pair(s) rest on fewer than {N_MIN} shared terms")
+            if notes:
+                lines.append("Excluded from the statements above: " + "; ".join(notes) + ".")
     counts = matrix.notna().sum(axis=0).sort_values(ascending=False)
     lines += [f"{c}: {int(n)} significantly enriched terms." for c, n in counts.items()]
     return lines
 
 
+def _matrix_caveat(stats):
+    if not getattr(stats, "pca_is_zscored", False):
+        return []
+    return [f"⚠ The PCA runs on '{stats.pca_source}' ({len(stats.pca_df)} proteins), a per-protein "
+            "z-scored matrix. If it holds a selected subset (significant or most-variable "
+            "proteins), group separation and effect sizes are inflated by construction — the "
+            "direction of the result stands, the magnitude does not. Provide the full log2 "
+            "intensity matrix for an unbiased assessment."]
+
+
 def generate(stats, meta_go, explore, provenance):
     sections = [
-        ("Experimental design (PCA)", _design_section(explore)),
+        ("Experimental design (PCA)", _matrix_caveat(stats) + _design_section(explore)),
         ("Design factors (PC × factors)", _multifactor_section(explore)),
         ("Quality & homogeneity", _qc_section(explore, stats.cond_map)),
         ("Functional synthesis (Meta-GO)", _go_section(meta_go)),

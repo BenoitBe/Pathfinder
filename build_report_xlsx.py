@@ -1,5 +1,6 @@
 """Pathfinder synthesis workbook export (matrices + tables)."""
 from __future__ import annotations
+import numpy as np
 import pandas as pd
 
 
@@ -45,8 +46,11 @@ def build(path, meta_go, explore, provenance: dict, resume=None, pubs=None):
         explore["pca"]["scores"].to_excel(xw, sheet_name="PCA_scores")
         # loadings: top |PC1| contributors
         load = explore["pca"]["loadings"]
+        # sort positionally: gene symbols repeat (isoforms, protein groups), and
+        # reindexing on a duplicated index raises.
         if "PC1" in load.columns:
-            load = load.reindex(load["PC1"].abs().sort_values(ascending=False).index)
+            order = np.argsort(-load["PC1"].abs().to_numpy())
+            load = load.iloc[order]
         load.head(200).to_excel(xw, sheet_name="PCA_loadings")
         explore["pc_factor"].to_excel(xw, sheet_name="PC_factor_assoc", index=False)
         multi = explore.get("pc_factor_multi")

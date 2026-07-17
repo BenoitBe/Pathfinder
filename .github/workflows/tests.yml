@@ -1,0 +1,44 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run the test suite
+        run: pytest -q
+
+      - name: Smoke-test the example dataset
+        run: |
+          cd example_data && python make_synthetic.py && cd ..
+          python pathfinder.py --stats example_data/Proteomic_Results.xlsx \
+                               --go example_data/GO_Results.xlsx \
+                               --design example_data/ExperimentalDesign.csv \
+                               --no-online --no-umap --outdir /tmp/smoke
+          test -f /tmp/smoke/pathfinder_report.html
+          test -f /tmp/smoke/pathfinder_synthesis.xlsx
+          test -f /tmp/smoke/pathfinder_summary.md

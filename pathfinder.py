@@ -105,15 +105,16 @@ def main(argv=None):
         if not args.stats:
             ap.error("no workbook with '<C>_p.val' columns found - specify --stats <file.xlsx>")
     if not args.go:
-        for p, (_, is_go) in (candidates or []):
-            if is_go:
-                args.go = p
-                print(f"[Pathfinder] GO auto-detected (by content): {p}")
-                break
-        # GO may live in the same workbook as the statistics
-        if not args.go and args.stats and _peek(args.stats)[1]:
+        # the GO sheets of the analysed workbook always win over any other file around
+        if args.stats and _peek(args.stats)[1]:
             args.go = args.stats
             print("[Pathfinder] GO found inside the statistics workbook.")
+        else:
+            for p, (_, is_go) in (candidates or []):
+                if is_go:
+                    args.go = p
+                    print(f"[Pathfinder] GO auto-detected (by content): {p}")
+                    break
 
     provenance = {"tool": "Pathfinder v1",
                   "date": time.strftime("%Y-%m-%d %H:%M:%S")}
@@ -197,7 +198,19 @@ def main(argv=None):
         # what the loader actually kept
         sizes = Counter(stats.cond_map[c] for c in stats.sample_int_cols)
         print(f"[Loader] comparison sheet selected: {len(stats.comp)} rows")
-        print(f"[Loader] PCA MATRIX: sheet '{stats.pca_source}' -> {len(stats.sample_int_cols)} sample columns")
+        print(f"[Loader] PCA MATRIX: sheet '{stats.pca_source}' -> {len(stats.sample_int_cols)} "
+              f"sample columns, {len(stats.pca_df)} proteins"
+              + (" [Z-SCORED]" if stats.pca_is_zscored else " [raw intensities]"))
+        if getattr(stats, "candidates", None):
+            print("         candidate matrices considered:")
+            for c in sorted(stats.candidates, key=lambda c: -c["n_rows"]):
+                tags = []
+                if c["zscored"]: tags.append("z-scored")
+                if not c["log_scale"]: tags.append("not log-scaled")
+                if c["match"]: tags.append(f"design match {c['match']:.0%}")
+                mark = " <== used" if c["sheet"] == stats.pca_source else ""
+                print(f"           {c['sheet']:<26} {c['n_cols']:>3} cols x {c['n_rows']:>5} rows"
+                      f"  {', '.join(tags) or 'raw log2'}{mark}")
         if stats.sample_int_cols:
             print("         e.g.: " + ", ".join(str(c) for c in stats.sample_int_cols[:10]))
         print(f"[Loader] Z-score sheet: {'present' if stats.zscore is not None else 'absent'}")
@@ -212,6 +225,36 @@ def main(argv=None):
               f"{'RESOLVED' if stats.conditions_resolved else 'NOT resolved'}")
         print(f"[Loader] conditions ({len(sizes)}) group sizes: "
               + ", ".join(f"{c}={n}" for c, n in list(sizes.items())[:12]))
+        # GO sheet -> contrast mapping audit
+        if args.go and os.path.exists(args.go):
+            try:
+                g = io_layer.load_go(args.go, stats.contrasts, conditions=stats.conditions, verbose=False)
+                print(f"\n[GO mapping] {len(g.mapping)} GO sheet(s) -> contrasts")
+                for sh, c in g.mapping.items():
+                    flag = "OK " if c else "!! "
+                    print(f"    {flag}{sh:<28} -> {c or 'UNMATCHED'}   [{g.mapping_how[sh]}]")
+                if g.unmatched:
+                    # explain WHY, instead of leaving the user guessing
+                    aliases = io_layer._condition_aliases(stats.conditions)
+                    print("\n    Why unmatched? Pathfinder splits a sheet name into two known")
+                    print("    conditions. Known spellings (aliases -> condition):")
+                    for a, c in sorted(aliases.items()):
+                        print(f"      {a:<24} -> {c}")
+                    print("    Contrasts to match against:")
+                    for c in stats.contrasts[:4]:
+                        print(f"      {c}")
+                    print("    If a sheet name uses tokens absent from that list, the design "
+                          "conditions and the stats columns disagree: fix the design, or "
+                          "rename the sheets.")
+                if g.duplicates:
+                    for c, shs in g.duplicates.items():
+                        print(f"    !! COLLISION on '{c}': {', '.join(shs)}")
+                if g.missing:
+                    print(f"    note: contrasts without a GO sheet: {', '.join(map(str, g.missing))}")
+                print(f"    summary: {len(g.mapping) - len(g.unmatched)}/{len(g.mapping)} mapped, "
+                      f"{len(g.duplicates)} collision(s), {len(g.missing)} contrast(s) without GO")
+            except Exception as e:
+                print(f"\n[GO mapping] not available ({type(e).__name__}: {e})")
         print("=============================\n")
         return None
 
@@ -222,22 +265,45 @@ def main(argv=None):
     provenance["conditions_resolved"] = "yes" if stats.conditions_resolved else "NO - provide --design"
     provenance["n_samples"] = len(stats.sample_int_cols)
     provenance["n_proteins"] = len(stats.comp)
+    provenance["pca_matrix"] = (f"{stats.pca_source} ({len(stats.pca_df)} proteins x "
+                                f"{len(stats.sample_int_cols)} samples"
+                                + (", z-scored subset" if stats.pca_is_zscored else ", raw log2") + ")")
 
     go_res = None
     if args.go and os.path.exists(args.go):
-        go = io_layer.load_go(args.go, stats.contrasts)
-        provenance["go_file"] = os.path.basename(args.go)
-        provenance["go_rows"] = len(go.long)
-        go_res = axis_meta_go.run(go.long, p_thr=args.pthr, jaccard_cut=args.jaccard)
-    else:
+        try:
+            go = io_layer.load_go(args.go, stats.contrasts, conditions=stats.conditions)
+        except Exception as e:
+            print(f"[Pathfinder] ⚠ GO file unreadable ({type(e).__name__}: {e}) — "
+                  "Meta-GO axis skipped.")
+            provenance["go_file"] = f"{os.path.basename(args.go)} - unreadable, axis skipped"
+            go = None
+        if go is not None:
+            provenance["go_sheets_mapped"] = f"{len(go.mapping) - len(go.unmatched)}/{len(go.mapping)}"
+            if go.unmatched:
+                provenance["go_unmatched"] = ", ".join(go.unmatched)
+            if go.duplicates:
+                provenance["go_collisions"] = "; ".join(f"{c}: {', '.join(sh)}"
+                                                        for c, sh in go.duplicates.items())
+            if go.missing:
+                provenance["go_contrasts_without_sheet"] = ", ".join(map(str, go.missing))
+            if len(go.long) == 0:
+                print("[Pathfinder] \u26a0 no GO sheet matches these contrasts - Meta-GO axis "
+                      "skipped. Check that the GO file belongs to this analysis (--go).")
+                provenance["go_file"] = f"{os.path.basename(args.go)} - no matching sheet, axis skipped"
+            else:
+                provenance["go_file"] = os.path.basename(args.go)
+                provenance["go_rows"] = len(go.long)
+                go_res = axis_meta_go.run(go.long, p_thr=args.pthr, jaccard_cut=args.jaccard)
+    if go_res is None:
         # empty matrix -> informative Meta-GO tab
         empty = pd.DataFrame(columns=["term_name", "term_id", "source", "n_sig",
                                       "redundancy_cluster", "is_representative"])
         go_res = {"matrix": pd.DataFrame(), "meta": empty,
                   "directionality": pd.DataFrame(), "term_genes": {},
                   "contrast_corr": pd.DataFrame(), "contrast_order": [],
-                  "contrast_shared": pd.DataFrame()}
-        provenance["go_file"] = "absent - Meta-GO axis skipped"
+                  "contrast_shared": pd.DataFrame(), "contrast_relation": None}
+        provenance.setdefault("go_file", "absent - Meta-GO axis skipped")
 
     # ---- Exploration axis ----
     # design factors (multi-factor: condition, batch, injection order...)
@@ -262,17 +328,40 @@ def main(argv=None):
 
     taxid, org, src = species_mod.resolve_species(org_arg=org_arg)
 
-    if not taxid and not args.no_online:
+    def _via_string(query):
+        """Resolve a free-text organism against STRING's own species list (~12k),
+        which also proves the Publications axis can run for it."""
+        try:
+            cands = species_mod.lookup_species(query)
+        except Exception as e:
+            print(f"[Pathfinder] \u26a0 could not reach the STRING species list "
+                  f"({type(e).__name__}) - pass an NCBI taxid instead.")
+            return None
+        return species_mod.choose_candidate(cands)
+
+    if not taxid and org_arg:
+        # explicit --org: never prompt for the species, just try to resolve it
+        taxid = _via_string(org_arg)
+        src = "STRING species list" if taxid else f"unresolved '{org_arg}'"
+        if not taxid:
+            print(f"[Pathfinder] \u26a0 organism '{org_arg}' not resolved - Publications "
+                  "axis skipped. Give the NCBI taxid (e.g. --org 90675) to be sure.")
+
+    elif not taxid and not args.no_online:
         answer = species_mod.prompt_species(default=excel_org)
         if answer is None:                       # not a TTY -> use detection silently
             taxid, org, src = species_mod.resolve_species(excel_org=excel_org)
+            answer = excel_org or ""
         elif answer:
             taxid, org, src = species_mod.resolve_species(org_arg=answer)
-            if not taxid:
-                print(f"[Pathfinder] ⚠ organism '{answer}' not recognised — Publications axis skipped.")
-                src = f"unrecognised '{answer}'"
         else:
             src = "skipped by user"
+        if not taxid and answer:
+            taxid = _via_string(answer)
+            src = "STRING species list" if taxid else f"unresolved '{answer}'"
+            if not taxid:
+                print(f"[Pathfinder] \u26a0 organism '{answer}' not resolved - Publications "
+                      "axis skipped. Give the NCBI taxid (e.g. --org 90675) to be sure.")
 
     provenance["species_taxid"] = f"{taxid} ({org or 'taxid'} · {src})" if taxid else src
 
@@ -286,7 +375,8 @@ def main(argv=None):
             print("[Pathfinder] ⚠ no publication returned (network issue or no significant proteins).")
         provenance["publications"] = f"STRING PMID · {len(pubs['results'])} contrasts · {n} PMIDs"
         for c, info in pubs["provenance"].items():
-            provenance[f"pub[{c}]"] = info
+            provenance["publications_criterion" if c == "_criterion" else
+                       "publications_skipped" if c == "_skipped" else f"pub[{c}]"] = info
 
     # ---- KPIs ----
     n_go_sig = int(go_res["matrix"].notna().sum().sum()) if not go_res["matrix"].empty else 0
