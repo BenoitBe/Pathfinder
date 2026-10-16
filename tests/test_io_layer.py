@@ -254,10 +254,38 @@ class TestDesign:
         assert stats.conditions_resolved is True
         assert len(stats.conditions) == 8
 
-    def test_multi_factor_columns_are_kept(self, workbook_full):
-        df, label_col = io_layer.load_design_frame(workbook_full["design"])
+    def test_multi_factor_columns_are_kept(self, workbook_full, tmp_path):
+        d = pd.read_csv(workbook_full["design"])
+        d["batch"] = ["b1" if i < 12 else "b2" for i in range(len(d))]
+        alt = tmp_path / "design_batch.csv"
+        d.to_csv(alt, index=False)
+        df, label_col = io_layer.load_design_frame(str(alt))
         stats = io_layer.load_stats(workbook_full["path"],
-                                    design_map=io_layer.load_design(workbook_full["design"]))
+                                    design_map=io_layer.load_design(str(alt)))
         factors = io_layer.map_design_factors(stats.sample_int_cols, df, label_col)
-        assert list(factors.columns) == ["condition", "replicate"]
+        assert list(factors.columns) == ["condition", "batch"]
         assert len(factors) == 24
+
+    @pytest.mark.parametrize("col", ["replicate", "Replicate", "rep", "REP", "replicat"])
+    def test_replicate_index_is_not_a_factor(self, workbook_full, tmp_path, col):
+        """1, 2, 3 inside every condition: testing it against the PCs is meaningless
+        and doubles the BH family (Deimos designs always carry this column)."""
+        d = pd.read_csv(workbook_full["design"]).rename(columns={"replicate": col})
+        alt = tmp_path / "design_rep.csv"
+        d.to_csv(alt, index=False)
+        df, label_col = io_layer.load_design_frame(str(alt))
+        stats = io_layer.load_stats(workbook_full["path"],
+                                    design_map=io_layer.load_design(str(alt)))
+        factors = io_layer.map_design_factors(stats.sample_int_cols, df, label_col)
+        assert list(factors.columns) == ["condition"]
+
+    def test_a_column_merely_containing_rep_is_kept(self, workbook_full, tmp_path):
+        d = pd.read_csv(workbook_full["design"])
+        d["prep_day"] = ["d1" if i % 2 else "d2" for i in range(len(d))]
+        alt = tmp_path / "design_prep.csv"
+        d.to_csv(alt, index=False)
+        df, label_col = io_layer.load_design_frame(str(alt))
+        stats = io_layer.load_stats(workbook_full["path"],
+                                    design_map=io_layer.load_design(str(alt)))
+        factors = io_layer.map_design_factors(stats.sample_int_cols, df, label_col)
+        assert "prep_day" in factors.columns

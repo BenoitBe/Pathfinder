@@ -79,15 +79,94 @@ def build_matrix(stats, p_thr: float = 0.05):
     return matrix, meta, pi_df, rob_df
 
 
-def directionality(matrix: pd.DataFrame, meta: pd.DataFrame):
-    """Per protein: shared / specific / opposite regulation across contrasts."""
+# |r| between the log2 fold-change profiles of two contrasts (all proteins) above which
+# they are taken to measure the same comparison in different strata (e.g. 24 h vs 0 h in
+# two cultivars). Below it, the two contrasts compare different things and opposite
+# signs are not a contradiction.
+PARALLEL_R_MIN = 0.3
+
+
+def lfc_table(stats) -> pd.DataFrame:
+    """Unmasked log2 fold-changes, one column per contrast (all proteins)."""
+    comp = stats.comp
+    out = {}
+    for c in stats.contrasts:
+        d_col = _find_contrast_col(comp, c, ["diff", "logfc", "lfc"])
+        if d_col is not None:
+            out[c] = pd.to_numeric(comp[d_col], errors="coerce").values
+    return pd.DataFrame(out)
+
+
+def comparable_pairs(stats, r_min: float = PARALLEL_R_MIN, min_n: int = 50):
+    """Pairs of contrasts whose directions can be compared protein by protein.
+
+    Two contrasts are comparable when they share no condition AND their fold-change
+    profiles over all proteins are correlated (|r| >= r_min): they then measure the
+    same comparison in different strata, and a protein going up in one and down in the
+    other is a genuine reversal. Contrasts sharing a condition are never comparable:
+    A_vs_B up and A_vs_C down only says B < A < C, an ordering, not a contradiction;
+    nor are uncorrelated contrasts (they compare different things).
+
+    Returns {(a, b): +1 | -1} (sign of r: -1 when one contrast is written the other way
+    round), {} when nothing is comparable, None when fold-changes are unavailable.
+    """
+    from axis_meta_go import _pair_relation
+    L = lfc_table(stats)
+    if L.shape[1] < 2:
+        return None
+    pairs = {}
+    cols = list(L.columns)
+    for i, a in enumerate(cols):
+        for b in cols[i + 1:]:
+            if _pair_relation(a, b)[0] != "disjoint":
+                continue
+            both = L[[a, b]].dropna()
+            if len(both) < min_n or both[a].std() == 0 or both[b].std() == 0:
+                continue
+            r = float(both[a].corr(both[b]))
+            if abs(r) >= r_min:
+                pairs[(a, b)] = 1 if r > 0 else -1
+    return pairs
+
+
+def _reversals(values: dict, pairs: dict) -> list:
+    """Comparable pairs in which this protein/term moves against the pair's trend."""
+    out = []
+    for (a, b), sgn in pairs.items():
+        va, vb = values.get(a), values.get(b)
+        if va is None or vb is None or not (np.isfinite(va) and np.isfinite(vb)):
+            continue
+        if np.sign(va) * np.sign(vb) == -sgn:
+            out.append(f"{a} ({va:+.2f}) vs {b} ({vb:+.2f})")
+    return out
+
+
+def directionality(matrix: pd.DataFrame, meta: pd.DataFrame, pairs=None):
+    """Per protein: shared / specific / opposite / mixed regulation across contrasts.
+
+    pairs (see comparable_pairs): 'opposite' = reversed between two comparable
+    contrasts; 'mixed' = up in some contrasts and down in others that compare
+    different things (not a contradiction). Without pairs (fold-changes unavailable),
+    any protein both up and down is called 'opposite', as before."""
     up = meta["n_up"].values
     dn = meta["n_down"].values
-    pattern = np.where((up > 0) & (dn > 0), "opposite",
+    out = meta.copy()
+    if pairs is None:
+        both = np.where((up > 0) & (dn > 0), "opposite", "")
+        out["opposite_in"] = ""
+    else:
+        rev = []
+        for i in matrix.index:
+            row = matrix.loc[i]
+            vals = {c: float(v) for c, v in row.items() if pd.notna(v)}
+            rev.append("; ".join(_reversals(vals, pairs)) if (len(vals) > 1) else "")
+        out["opposite_in"] = rev
+        has_rev = np.array([bool(r) for r in rev])
+        both = np.where(has_rev, "opposite", np.where((up > 0) & (dn > 0), "mixed", ""))
+    pattern = np.where(both != "", both,
                        np.where(up > 1, "shared up",
                                 np.where(dn > 1, "shared down",
                                          np.where(up == 1, "specific up", "specific down"))))
-    out = meta.copy()
     out["pattern"] = pattern
     out["up_in"] = [", ".join(c for c in matrix.columns if pd.notna(matrix.loc[i, c])
                               and matrix.loc[i, c] > 0) for i in matrix.index]
@@ -118,14 +197,18 @@ def rank_core(meta: pd.DataFrame, matrix: pd.DataFrame):
     return out.sort_values(sort_cols, ascending=False)
 
 
-def run(stats, p_thr: float = 0.05):
+def run(stats, p_thr: float = 0.05, pairs="auto"):
+    """pairs: 'auto' (computed from the fold-changes), a dict from comparable_pairs,
+    or None (no comparability information: legacy 'opposite' rule)."""
+    if isinstance(pairs, str) and pairs == "auto":
+        pairs = comparable_pairs(stats)
     matrix, meta, pi_df, rob_df = build_matrix(stats, p_thr)
     if matrix.empty:
         return {"matrix": matrix, "meta": meta, "table": meta,
                 "contrast_corr": pd.DataFrame(), "contrast_order": [],
                 "contrast_shared": pd.DataFrame(), "contrast_relation": None,
-                "has_pi": False, "n_significant": 0}
-    direction = directionality(matrix, meta)
+                "has_pi": False, "n_significant": 0, "pairs": pairs}
+    direction = directionality(matrix, meta, pairs)
     table = rank_core(direction, matrix)
     # same clustering machinery as the GO axis, but on protein profiles
     from axis_meta_go import contrast_similarity
@@ -134,4 +217,4 @@ def run(stats, p_thr: float = 0.05):
             "contrast_corr": ccorr, "contrast_order": corder,
             "contrast_shared": cshared, "contrast_relation": crel,
             "has_pi": pi_df is not None, "has_robustness": rob_df is not None,
-            "n_significant": int(len(matrix))}
+            "n_significant": int(len(matrix)), "pairs": pairs}

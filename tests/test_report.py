@@ -58,6 +58,34 @@ class TestEndToEnd:
         out = _run(tmp_path, "--stats", workbook_zscore_only["path"])
         assert (out / "pathfinder_report.html").exists()
 
+    def test_go_none_never_reads_a_foreign_go_workbook(self, tmp_path, workbook_full,
+                                                       go_workbook, monkeypatch):
+        """A GO workbook from ANOTHER analysis sits next to the outputs: auto-detection
+        would pick it up; '--go none' must skip Meta-GO and never open it."""
+        monkeypatch.chdir(tmp_path)                # go_only.xlsx is in the cwd
+        auto = _run(tmp_path / "auto", "--stats", workbook_full["path"],
+                    "--design", workbook_full["design"])
+        prov_auto = pd.read_excel(auto / "pathfinder_synthesis.xlsx",
+                                  sheet_name="provenance").set_index("key")["value"]
+        assert prov_auto["go_file"] == "go_only.xlsx"          # the risk is real
+
+        out = _run(tmp_path, "--stats", workbook_full["path"], "--go", "none",
+                   "--design", workbook_full["design"])
+        prov = pd.read_excel(out / "pathfinder_synthesis.xlsx",
+                             sheet_name="provenance").set_index("key")["value"]
+        assert prov["go_file"].startswith("disabled (--go none)")
+        assert "go_sheets_mapped" not in prov.index
+
+    def test_provenance_records_version_and_ignored_replicate(self, tmp_path, workbook_full):
+        out = _run(tmp_path, "--stats", workbook_full["path"], "--go", "none",
+                   "--design", workbook_full["design"])
+        prov = pd.read_excel(out / "pathfinder_synthesis.xlsx",
+                             sheet_name="provenance").set_index("key")["value"]
+        assert prov["tool"] == f"Pathfinder {pathfinder.__version__}"
+        assert prov["design_not_tested"].startswith("replicate")
+        multi = pd.read_excel(out / "pathfinder_synthesis.xlsx", sheet_name="PC_factor_multi")
+        assert set(multi["factor"]) == {"condition"}
+
     def test_unreadable_go_does_not_crash(self, tmp_path, workbook_full):
         bad = tmp_path / "bad.xlsx"
         bad.write_text("not an excel file")

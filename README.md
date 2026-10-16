@@ -2,7 +2,7 @@
 
 ![Pathfinder](pathfinder_icon.svg)
 
-[![tests](https://github.com/BenoitBe/pathfinder-synthesis-pipeline/actions/workflows/tests.yml/badge.svg)](https://github.com/BenoitBe/pathfinder-synthesis-pipeline/actions/workflows/tests.yml)
+[![tests](https://github.com/BenoitBe/Pathfinder/actions/workflows/tests.yml/badge.svg)](https://github.com/BenoitBe/Pathfinder/actions/workflows/tests.yml)
 
 **Downstream companion to Deimos and Phobos.**
 Cross-comparison synthesis and unsupervised exploration — from the Excel report
@@ -30,7 +30,10 @@ contrasts, plus an automatic interpretive summary.
 
 - **Protein signature** — protein × contrast matrix of significant fold-changes:
   core proteins (recurrent, consistent direction), contrast-specific ones, and those
-  regulated in opposite directions. Ranked by recurrence then Pi-score (|LFC| ×
+  **reversed between comparable contrasts** (no shared condition, correlated log2FC
+  profiles: the same comparison in different strata). Up in one contrast and down in
+  another that compares different conditions is reported as `mixed` — an ordering of
+  the conditions, not a reversal. Ranked by recurrence then Pi-score (|LFC| ×
   −log10 p), with the upstream robustness score carried through as a confidence
   column. The Pi-score orders proteins; inclusion rests on the adjusted p-value alone.
 - **Co-expression modules (WGCNA)** — the modules computed upstream are *read*, not
@@ -40,7 +43,8 @@ contrasts, plus an automatic interpretive summary.
   the core protein signature sits (Fisher exact per module), and each module's hubs.
   'grey' is WGCNA's unassigned bin and is never treated as a module.
 - **Meta-GO** — term × contrast matrix of signed z-scores, cross-directionality
-  (shared up/down vs opposite regulation), Jaccard redundancy grouping with a
+  (shared up/down, reversed between comparable contrasts, mixed), Jaccard redundancy
+  grouping with a
   **Non-redundant / All terms** switch. Split by source (BP / MF / CC / KEGG / Reactome).
 - **Contrast clustering** — contrasts correlated on their GO signature and ordered
   hierarchically: which comparisons move the same functions the same way, which are
@@ -51,7 +55,10 @@ contrasts, plus an automatic interpretive summary.
   (Kruskal-Wallis + ε², BH-corrected); inter-sample correlation.
 - **Multi-factor design testing** — every design column (condition, batch,
   injection order…) is tested against every PC. Categorical → Kruskal-Wallis + ε²;
-  numeric → Spearman. Technical factors driving a high-variance PC are flagged.
+  numeric → Spearman. Technical factors driving a high-variance PC are flagged. The
+  replicate index (`replicate` / `rep`: 1, 2, 3 inside each condition) is not a factor
+  and is not tested — it would only double the BH family. A real processing batch
+  belongs in its own column (`batch`, `plate`, `day`…).
 - **Protein UMAP** — interactive, colourable by mean abundance, per-contrast LFC,
   and **GO term** (source and term-count selectors).
 - **Publications** — STRING **PMID enrichment** per contrast: which papers are
@@ -75,6 +82,12 @@ contrasts, plus an automatic interpretive summary.
 
 Files and columns are detected **by content**, not by filename — the GO sheets may
 live in the same workbook as the statistics.
+
+**Deimos workbooks carry a hidden `_manifest` sheet** (schema `deimos-results` 1.x):
+Pathfinder reads from it the GO sheet → contrast mapping (Deimos shortens sheet names
+beyond what can be parsed back), the organism, the p-value adjustment and the upstream
+volcano rule. Without a manifest (older workbooks, Phobos) the mapping is reconstructed
+from the sheet names, as before. An unknown major schema version triggers a warning.
 
 The design is optional but **required to colour the PCA and test PC ↔ condition**
 when sample columns do not encode the condition (e.g. `Sple-1 … Sple-36`).
@@ -127,19 +140,31 @@ python pathfinder.py --org 90675              # NCBI taxid, always unambiguous
 python pathfinder.py --org 10116 --refresh # bypass the STRING cache
 python pathfinder.py --no-online           # fully offline: no prompt, no query
 
+# No GO at all: skip Meta-GO and never look for a GO workbook around
+python pathfinder.py --stats ProteomicAnalysis_Results.xlsx --go none
+
 # Inspect what was detected, then exit
 python pathfinder.py --diagnose
 ```
+
+**From Deimos** — set `make_pathfinder: true` (or `--pathfinder`) in Deimos: it runs
+Pathfinder as its last step, in a separate process, with every file passed explicitly
+(no auto-detection) and the output in `<out_dir>/pathfinder/`.
+
+**What "significant" means here** — a protein counts when its adjusted p-value
+(`<contrast>_p.adj`) is below `--pthr` (0.05), with no fold-change criterion. Upstream
+volcanos usually combine a raw p-value and a ratio, so they list more proteins: both
+rules are written in the summary.
 
 ### Options
 
 | Option                    | Role                                                       |
 | ------------------------- | ---------------------------------------------------------- |
 | `--stats`                 | Statistics workbook (auto-detected by content if omitted)   |
-| `--go`                    | GO enrichment workbook (may be the same file)               |
+| `--go`                    | GO enrichment workbook (may be the same file); `none` disables Meta-GO and GO auto-detection |
 | `--design`                | Sample → condition mapping (+ extra factors)                |
 | `--outdir`                | Output directory                                            |
-| `--pthr`                  | p threshold masking the GO matrix (default 0.05)            |
+| `--pthr`                  | Adjusted-p threshold: protein signature and GO matrix mask (default 0.05) |
 | `--jaccard`               | Cut distance for GO redundancy grouping (default 0.5)       |
 | `--org`                   | Species: gProfiler code, scientific name, or NCBI taxid     |
 | `--no-online`             | Fully offline: no species prompt, no STRING query           |
@@ -147,6 +172,7 @@ python pathfinder.py --diagnose
 | `--no-umap`               | Disable UMAP views                                          |
 | `--diagnose`              | Report detected sheets/columns and group sizes              |
 | `--write-design-template` | Write a pre-filled design template                          |
+| `--version`               | Print the Pathfinder version                                |
 
 ---
 
@@ -157,9 +183,12 @@ pip install pytest
 pytest
 ```
 
-78 tests covering the loader (GO sheet mapping, per-sample matrix selection, design
-resolution), the three axes, the interpretive summary and the HTML report, plus
-repository invariants (Python 3.9-3.12 syntax, no untranslated strings). Most of them
+176 tests covering the loader (GO sheet mapping, per-sample matrix selection, design
+resolution, upstream manifest), the axes, the interpretive summary and the HTML report,
+plus repository invariants (Python 3.9-3.12 syntax, no untranslated strings). A
+**contract test** runs on a real Deimos workbook reduced to its data sheets
+(`tests/fixtures/deimos_contract.xlsx`, regenerated with
+`tests/fixtures/make_deimos_fixture.py` whenever Deimos bumps its manifest schema). Most of them
 encode a regression that actually happened on production data — nested condition names
 silently merging contrasts, a PCA running on a pre-selected subset, correlation
 reported as biology when it was mechanical, figures collapsing to 300 px. CI runs the
@@ -191,9 +220,12 @@ pathfinder/
 └── tests/                     # pytest suite (regression-driven)
     ├── conftest.py            # synthetic workbooks mirroring real-world shapes
     ├── test_io_layer.py
+    ├── test_manifest.py       # Deimos _manifest: GO mapping, version, species
+    ├── test_contract_deimos.py
     ├── test_axes.py
     ├── test_summary.py
-    └── test_report.py
+    ├── test_report.py
+    └── fixtures/              # real Deimos workbook (data sheets only) + design
 ```
 
 ---

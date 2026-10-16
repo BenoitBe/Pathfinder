@@ -1,0 +1,17 @@
+label,condition
+Sple-WT-01,Live_K12
+Sple-WT-02,Live_K12
+Sple-WT-03,Live_K12
+Sple-WT-04,Live_K12
+Sple-KO-01,Heat_killed_K12
+Sple-KO-02,Heat_killed_K12
+Sple-KO-03,Heat_killed_K12
+Sple-KO-04,Heat_killed_K12
+Sple-WT-stress-01,Live_M18
+Sple-WT-stress-02,Live_M18
+Sple-WT-stress-03,Live_M18
+Sple-WT-stress-04,Live_M18
+Sple-KO-stress-01,Heat_killed_M18
+Sple-KO-stress-02,Heat_killed_M18
+Sple-KO-stress-03,Heat_killed_M18
+Sple-KO-stress-04,Heat_killed_M18

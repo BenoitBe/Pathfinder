@@ -47,7 +47,7 @@ def build(path, meta_go, explore, provenance: dict, resume=None, pubs=None, prot
             t = prots["table"]
             cols = [c for c in ("gene", "description", "n_sig", "pattern", "recurrence",
                                 "best_pi", "median_pi", "median_robustness", "max_abs_lfc",
-                                "up_in", "down_in") if c in t.columns]
+                                "up_in", "down_in", "opposite_in") if c in t.columns]
             t[cols].to_excel(xw, sheet_name="Proteins_core")
             m = prots["matrix"].copy()
             for c in ("gene", "n_sig", "pattern"):

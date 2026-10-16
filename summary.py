@@ -113,6 +113,63 @@ def _multifactor_section(explore):
     return lines
 
 
+DISPERSION_RATIO = 2.5   # within-condition spread vs median condition (null: ~1-2 % false alarms)
+
+
+def _dispersion_flags(explore):
+    """Heterogeneous conditions: replicates spread along the design axes of the PCA.
+
+    The correlation check above works on all proteins and misses a condition whose
+    replicates sit at different points of the biological response (asynchronous
+    development, partial treatment...): r stays ~0.95 because most proteins do not
+    move. Here the spread of each condition around its centroid is measured on the
+    PCs that carry the condition effect and compared with the median condition."""
+    try:
+        sc = explore["pca"]["scores"]
+        assoc = explore["pc_factor"].set_index("PC")
+    except (KeyError, TypeError):
+        return []
+    pcol = "p_adj_BH" if "p_adj_BH" in assoc.columns else "p_value"
+    pcs = [pc for pc in assoc.index[:6]
+           if pd.notna(assoc.loc[pc, pcol]) and assoc.loc[pc, pcol] < P_ADJ_THR
+           and assoc.loc[pc, "epsilon2"] >= EFF_MED][:4]
+    if len(pcs) < 2:
+        pcs = [c for c in ("PC1", "PC2") if c in sc.columns]
+    sizes = sc["condition"].value_counts()
+    if len(pcs) < 2 or len(sizes) < 3 or sizes.min() < 3:
+        return []
+    X = sc[pcs].astype(float)
+    cent = X.groupby(sc["condition"]).mean()
+    spread, far, members = {}, {}, {}
+    for cond, g in X.groupby(sc["condition"]):
+        d = np.sqrt(((g - cent.loc[cond]) ** 2).sum(axis=1))
+        spread[cond] = float(d.mean())
+        far[cond] = d.idxmax()
+        members[cond] = list(g.index)
+    med = float(np.median(list(spread.values())))
+    if med <= 0:
+        return []
+    out = []
+    for cond, v in sorted(spread.items(), key=lambda t: -t[1]):
+        ratio = v / med
+        if ratio < DISPERSION_RATIO:
+            break
+        # replicates sitting nearer another condition's centroid than their own
+        misplaced = []
+        for smp in members[cond]:
+            dist = np.sqrt(((cent - X.loc[smp]) ** 2).sum(axis=1))
+            other = dist.drop(cond)
+            if len(other) and other.min() < dist[cond]:
+                misplaced.append(f"{smp} lies closer to {other.idxmin()}")
+        where = "; ".join(misplaced) if misplaced else f"{far[cond]} is the farthest"
+        out.append(f"⚠ Condition {cond}: replicates {ratio:.1f}× more dispersed than the median "
+                   f"condition along the design axes ({', '.join(pcs)}) — heterogeneous "
+                   f"response (e.g. asynchronous development) or a sample issue; {where}. "
+                   "Global correlations cannot show it; expect weaker, less robust calls "
+                   "in the contrasts involving this condition.")
+    return out
+
+
 def _qc_section(explore, cond_map):
     corr = explore["correlation"]
     zscored = bool(corr.attrs.get("zscored"))
@@ -156,6 +213,7 @@ def _qc_section(explore, cond_map):
     else:
         lines.append(f"Within-condition correlation is homogeneous (median mean r={med:.2f}); "
                      "no outlier sample detected.")
+    lines.extend(_dispersion_flags(explore))
     if zscored:
         lines.append("Correlations are computed on per-protein z-scores (no raw intensity matrix "
                      "available): absolute values are low by construction, only relative "
@@ -165,6 +223,7 @@ def _qc_section(explore, cond_map):
 
 def _go_section(meta_go):
     matrix, meta, direction = meta_go["matrix"], meta_go["meta"], meta_go["directionality"]
+    legacy = meta_go.get("pairs") is None
     if matrix.empty:
         return ["GO enrichment not provided — functional synthesis unavailable."]
     has_rep = "is_representative" in meta.columns and bool(meta["is_representative"].any())
@@ -179,19 +238,27 @@ def _go_section(meta_go):
         d = direction.loc[rep_keys]
         vc = d["pattern"].value_counts().to_dict()
         shared = vc.get("shared up", 0) + vc.get("shared down", 0)
-        mixed = vc.get("mixed", 0)
         rec = meta.loc[rep_keys].sort_values("n_sig", ascending=False)
         dom = (f" — top: {rec.iloc[0]['term_name']} ({int(rec.iloc[0]['n_sig'])} contrasts)"
                if len(rec) else "")
         count = f"{len(rep_keys)}" + (f"/{len(keys)}" if has_rep and len(rep_keys) < len(keys) else "")
+        if legacy:
+            dirn = f"{vc.get('mixed', 0)} with opposite direction"
+        else:
+            dirn = (f"{vc.get('opposite', 0)} reversed between comparable contrasts, "
+                    f"{vc.get('mixed', 0)} mixed")
         lines.append(f"{SRC_LABEL.get(src, src)}: {count} non-redundant terms "
-                     f"({shared} shared, {mixed} with opposite direction){dom}.")
+                     f"({shared} shared, {dirn}){dom}.")
     reps = meta.index[meta["is_representative"]] if has_rep else meta.index
     mx = direction.loc[reps]
-    mx = mx[mx["pattern"] == "mixed"].head(3)
+    mx = mx[mx["pattern"] == ("mixed" if legacy else "opposite")].head(3)
     if len(mx):
-        lines.append("Opposite regulation depending on contrast (worth investigating): "
+        lines.append(("Opposite regulation depending on contrast (worth investigating): "
+                      if legacy else "Reversed between comparable contrasts (worth investigating): ")
                      + "; ".join(f"{r.term_name} [{r.source}]" for _, r in mx.iterrows()) + ".")
+    if not legacy:
+        lines.append("'Mixed' terms go up in some contrasts and down in others that compare "
+                     "different conditions: an ordering of the conditions, not a reversal.")
     if (meta["redundancy_cluster"] >= 0).any():
         nc = meta["redundancy_cluster"].nunique()
         lines.append(f"After redundancy grouping: {nc} functional groups "
@@ -272,19 +339,40 @@ def _matrix_caveat(stats):
             "intensity matrix for an unbiased assessment."]
 
 
-def _protein_section(prots):
+def _significance_rule(provenance):
+    """The rule behind 'significant', stated once: Pathfinder's count and the upstream
+    volcano/dashboard count use different rules and would otherwise look contradictory."""
+    if not provenance or not provenance.get("significance_rule"):
+        return []
+    line = f"Significance rule: {provenance['significance_rule']}."
+    if provenance.get("volcano_rule_upstream"):
+        line += (f" Upstream volcanos and dashboard use {provenance['volcano_rule_upstream']}, "
+                 "so they list more proteins: the two counts are not meant to agree.")
+    return [line]
+
+
+def _protein_section(prots, provenance=None):
     """Which proteins carry the signature - the table that ends up in a paper."""
+    rule = _significance_rule(provenance)
     if prots is None or prots["matrix"].empty:
-        return ["No protein reaches significance in any contrast."]
+        return ["No protein reaches significance in any contrast."] + rule
     t, matrix = prots["table"], prots["matrix"]
     n_c = matrix.shape[1]
-    lines = [f"{len(matrix)} proteins significant in at least one of the {n_c} contrasts."]
+    lines = [f"{len(matrix)} proteins significant in at least one of the {n_c} contrasts."] + rule
     vc = t["pattern"].value_counts().to_dict()
     shared = vc.get("shared up", 0) + vc.get("shared down", 0)
     specific = vc.get("specific up", 0) + vc.get("specific down", 0)
     opposite = vc.get("opposite", 0)
-    lines.append(f"{shared} recurrent (same direction in several contrasts), {specific} "
-                 f"specific to one contrast, {opposite} regulated in opposite directions.")
+    mixed = vc.get("mixed", 0)
+    if prots.get("pairs") is None:
+        lines.append(f"{shared} recurrent (same direction in several contrasts), {specific} "
+                     f"specific to one contrast, {opposite} regulated in opposite directions.")
+    else:
+        lines.append(f"{shared} recurrent (same direction in several contrasts), {specific} "
+                     f"specific to one contrast, {opposite} reversed between comparable contrasts "
+                     f"(same comparison in different strata), {mixed} up in some contrasts and "
+                     "down in others that compare different conditions (an ordering, not a "
+                     "contradiction).")
 
     core = t[t["n_sig"] >= max(2, int(0.5 * n_c))]
     if len(core):
@@ -304,8 +392,14 @@ def _protein_section(prots):
         names = []
         for i, r in opp.head(3).iterrows():
             label = r.get("gene") if isinstance(r.get("gene"), str) and r.get("gene") not in ("", "nan") else i
-            names.append(f"{label} (up in {r['up_in'].split(',')[0]}, down in {r['down_in'].split(',')[0]})")
-        lines.append(f"Opposite regulation, often the most informative: {'; '.join(names)}.")
+            where = (str(r.get("opposite_in", "")).split(";")[0] if r.get("opposite_in")
+                     else f"up in {r['up_in'].split(',')[0]}, down in {r['down_in'].split(',')[0]}")
+            names.append(f"{label} ({where})")
+        lines.append(f"Reversed regulation, often the most informative: {'; '.join(names)}.")
+    elif prots.get("pairs") is not None:
+        lines.append("No protein is reversed between comparable contrasts"
+                     + (" (no pair of contrasts measures the same comparison in different "
+                        "strata)." if not prots["pairs"] else "."))
 
     if prots.get("has_pi"):
         lines.append("Proteins are ranked by recurrence then Pi-score (|LFC| x -log10 p). The "
@@ -347,10 +441,11 @@ def _wgcna_section(wgcna):
         hits = e[(~e["is_grey"]) & (e["p_adj_BH"] < 0.05)]
         if len(hits):
             r = hits.iloc[0]
-            lines.append(f"The core protein signature concentrates in module {r['module']} "
-                         f"({int(r['n_core'])}/{int(r['n_proteins'])} of its proteins, "
-                         f"p={_fmt_p(r['p_adj_BH'])}) — recurrent proteins are co-expressed, "
-                         "not scattered across the network.")
+            rule = wgcna.get("core_set_rule", "the core protein signature")
+            lines.append(f"The top-ranked proteins ({rule}) concentrate in module "
+                         f"{r['module']} ({int(r['n_core'])}/{int(r['n_proteins'])} of its "
+                         f"proteins, p={_fmt_p(r['p_adj_BH'])}) — they are co-expressed, not "
+                         "scattered across the network.")
         else:
             lines.append("The core signature is not concentrated in any module: recurrent "
                          "proteins are spread across the co-expression network.")
@@ -413,12 +508,15 @@ def _headline(stats, meta_go, explore, prots, wgcna):
             else pd.DataFrame()
         if len(hits):
             r = hits.iloc[0]
+            n_set = wgcna.get("core_set_n")
             mod_card = {"label": "Core module", "value": str(r["module"]),
-                        "detail": f"{int(r['n_core'])}/{int(r['n_proteins'])} proteins, "
-                                  f"p={_fmt_p(r['p_adj_BH'])}", "level": "ok"}
+                        "detail": (f"{int(r['n_core'])} of the top {n_set} · {int(r['n_proteins'])} "
+                                   f"proteins, p={_fmt_p(r['p_adj_BH'])}" if n_set else
+                                   f"{int(r['n_core'])}/{int(r['n_proteins'])} proteins, "
+                                   f"p={_fmt_p(r['p_adj_BH'])}"), "level": "ok"}
         else:
             mod_card = {"label": "Core module", "value": "scattered", "level": "info",
-                        "detail": "core proteins span several modules"}
+                        "detail": "top-ranked proteins span several modules"}
     cards.append(mod_card)
 
     # --- dominant function
@@ -446,13 +544,19 @@ def _convergence(prots, wgcna):
         return None
     hits = e[(~e["is_grey"]) & (e["p_adj_BH"] < 0.05)]
     n_c = prots["matrix"].shape[1]
-    core_n = int((prots["table"]["n_sig"] >= max(2, int(0.5 * n_c))).sum())
+    # the set actually tested for module enrichment (top-ranked proteins), not the
+    # stricter "significant in half the contrasts" count of the headline card
+    core_n = int(wgcna.get("core_set_n") or
+                 (prots["table"]["n_sig"] >= max(2, int(0.5 * n_c))).sum())
+    rule = wgcna.get("core_set_rule", "recurrent proteins")
     if not len(hits):
-        return {"core_n": core_n, "module": None, "contrast": None,
-                "verdict": "The core signature is spread across the co-expression "
-                           "network: no module concentrates it."}
+        return {"core_n": core_n, "core_title": "top-ranked signature",
+                "core_detail": "recurrence, then Pi-score", "module": None, "contrast": None,
+                "verdict": f"The top-ranked proteins ({rule}) are spread across the "
+                           "co-expression network: no module concentrates them."}
     r = hits.iloc[0]
-    out = {"core_n": core_n, "module": str(r["module"]),
+    out = {"core_n": core_n, "core_title": "top-ranked signature",
+           "core_detail": "recurrence, then Pi-score", "module": str(r["module"]),
            "module_detail": f"{int(r['n_core'])}/{int(r['n_proteins'])} proteins "
                             f"(p={_fmt_p(r['p_adj_BH'])})",
            "contrast": None, "contrast_detail": None, "verdict": None}
@@ -472,11 +576,11 @@ def _convergence(prots, wgcna):
             out["contrast"] = str(best["contrast"])
             out["contrast_detail"] = (f"separation={best['effect']:.2f}, "
                                       f"p={_fmt_p(best['p_value'])}{note}")
-            out["verdict"] = (f"The {core_n} recurrent proteins concentrate in module "
-                              f"{out['module']}, whose eigengene separates "
-                              f"{best['contrast']} best.")
+            out["verdict"] = (f"The top-ranked proteins ({rule}) concentrate in module "
+                              f"{out['module']} ({int(r['n_core'])} of them), whose eigengene "
+                              f"separates {best['contrast']} best.")
     if not out["verdict"]:
-        out["verdict"] = (f"The {core_n} recurrent proteins concentrate in module "
+        out["verdict"] = (f"The top-ranked proteins ({rule}) concentrate in module "
                           f"{out['module']}, but no eigengene was available to link it "
                           "to a comparison.")
     return out
@@ -487,7 +591,7 @@ def generate(stats, meta_go, explore, provenance, prots=None, wgcna=None):
         ("Experimental design (PCA)", _matrix_caveat(stats) + _design_section(explore)),
         ("Design factors (PC × factors)", _multifactor_section(explore)),
         ("Quality & homogeneity", _qc_section(explore, stats.cond_map)),
-        ("Protein-level signature", _protein_section(prots)),
+        ("Protein-level signature", _protein_section(prots, provenance)),
         ("Co-expression modules (WGCNA)", _wgcna_section(wgcna)),
         ("Functional synthesis (Meta-GO)", _go_section(meta_go)),
         ("Per-contrast detail", _contrast_section(meta_go)),

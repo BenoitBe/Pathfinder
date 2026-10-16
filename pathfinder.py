@@ -34,14 +34,21 @@ import species as species_mod
 import build_report_html as build_html
 import build_report_xlsx as build_xlsx
 
+__version__ = "1.1.1"
+
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="pathfinder")
+    ap.add_argument("--version", action="version", version=f"Pathfinder {__version__}")
     ap.add_argument("--stats", default=None,
                     help="statistics workbook (auto-detected by content if omitted)")
-    ap.add_argument("--go", default=None, help="GO enrichment workbook (optional; may be the same file)")
+    ap.add_argument("--go", default=None,
+                    help="GO enrichment workbook (optional; may be the same file). "
+                         "'none' disables the Meta-GO axis and any GO auto-detection.")
     ap.add_argument("--outdir", default=".")
-    ap.add_argument("--pthr", type=float, default=0.05, help="p threshold masking the GO matrix")
+    ap.add_argument("--pthr", type=float, default=0.05,
+                    help="adjusted-p threshold: protein signature (p.adj, no fold-change "
+                         "criterion) and GO matrix mask")
     ap.add_argument("--jaccard", type=float, default=0.5, help="cut distance for GO redundancy grouping")
     ap.add_argument("--no-umap", action="store_true")
     ap.add_argument("--design", default=None,
@@ -57,6 +64,12 @@ def main(argv=None):
     ap.add_argument("--diagnose", action="store_true",
                     help="report detected sheets/columns and group sizes, then exit")
     args = ap.parse_args(argv)
+
+    # --go none: no Meta-GO, and above all no hunting for a GO workbook around
+    # (it could belong to another project).
+    go_disabled = str(args.go).strip().lower() == "none" if args.go else False
+    if go_disabled:
+        args.go = None
 
     os.makedirs(args.outdir, exist_ok=True)
 
@@ -95,7 +108,7 @@ def main(argv=None):
         return stats, go
 
     candidates = None
-    if not args.stats or not args.go:
+    if not args.stats or (not args.go and not go_disabled):
         candidates = [(p, _peek(p)) for p in _list_xlsx()]
 
     if not args.stats:
@@ -106,7 +119,9 @@ def main(argv=None):
                 break
         if not args.stats:
             ap.error("no workbook with '<C>_p.val' columns found - specify --stats <file.xlsx>")
-    if not args.go:
+    if go_disabled:
+        print("[Pathfinder] GO disabled (--go none): Meta-GO axis skipped.")
+    elif not args.go:
         # the GO sheets of the analysed workbook always win over any other file around
         if args.stats and _peek(args.stats)[1]:
             args.go = args.stats
@@ -118,7 +133,7 @@ def main(argv=None):
                     print(f"[Pathfinder] GO auto-detected (by content): {p}")
                     break
 
-    provenance = {"tool": "Pathfinder v1",
+    provenance = {"tool": f"Pathfinder {__version__}",
                   "date": time.strftime("%Y-%m-%d %H:%M:%S")}
 
     # ---- Experimental design (sample -> condition) ----
@@ -261,6 +276,25 @@ def main(argv=None):
         return None
 
     provenance["stats_file"] = os.path.basename(args.stats)
+    # ---- Upstream manifest (Deimos contract): version check + what it declares ----
+    manifest = io_layer.read_manifest(args.stats)
+    if manifest:
+        sch, run = manifest.get("schema", {}), manifest.get("run", {})
+        provenance["upstream_manifest"] = (f"{sch.get('name', '?')} {sch.get('version', '?')}"
+                                           + (f" · commit {run['deimos_commit']}"
+                                              if run.get("deimos_commit") else ""))
+        warn = io_layer.manifest_version_warning(manifest)
+        if warn:
+            print(f"[Pathfinder] ⚠ {warn}")
+            provenance["upstream_manifest_warning"] = warn
+        declared = manifest.get("matrix", {}).get("sheet")
+        if declared and declared != stats.pca_source:
+            print(f"[Pathfinder] ⚠ the upstream manifest names '{declared}' as the sample "
+                  f"matrix, but '{stats.pca_source}' was selected - check --diagnose.")
+        if manifest.get("stats", {}).get("p_adjust"):
+            provenance["p_adjust_upstream"] = manifest["stats"]["p_adjust"]
+        if manifest.get("stats", {}).get("volcano_rule"):
+            provenance["volcano_rule_upstream"] = manifest["stats"]["volcano_rule"]
     provenance["contrasts"] = ", ".join(stats.contrasts)
     provenance["conditions"] = ", ".join(stats.conditions)
     provenance["design"] = design_src or "not provided"
@@ -270,6 +304,16 @@ def main(argv=None):
     provenance["pca_matrix"] = (f"{stats.pca_source} ({len(stats.pca_df)} proteins x "
                                 f"{len(stats.sample_int_cols)} samples"
                                 + (", z-scored subset" if stats.pca_is_zscored else ", raw log2") + ")")
+
+    # Contrasts whose directions can be compared (same comparison, different strata):
+    # the only pairs where "up in one, down in the other" is a genuine reversal.
+    pairs = axis_proteins.comparable_pairs(stats)
+    if pairs is not None:
+        provenance["opposite_rule"] = (
+            f"reversal only between contrasts sharing no condition with |r| >= "
+            f"{axis_proteins.PARALLEL_R_MIN} between their log2FC profiles "
+            f"({len(pairs)} comparable pair(s)); up in one contrast and down in another "
+            "that compares different conditions is reported as 'mixed'")
 
     go_res = None
     if args.go and os.path.exists(args.go):
@@ -281,7 +325,9 @@ def main(argv=None):
             provenance["go_file"] = f"{os.path.basename(args.go)} - unreadable, axis skipped"
             go = None
         if go is not None:
-            provenance["go_sheets_mapped"] = f"{len(go.mapping) - len(go.unmatched)}/{len(go.mapping)}"
+            provenance["go_sheets_mapped"] = (f"{len(go.mapping) - len(go.unmatched)}/{len(go.mapping)}"
+                                              + (f" ({go.from_manifest} via the upstream manifest)"
+                                                 if getattr(go, "from_manifest", 0) else ""))
             if go.unmatched:
                 provenance["go_unmatched"] = ", ".join(go.unmatched)
             if go.duplicates:
@@ -296,7 +342,8 @@ def main(argv=None):
             else:
                 provenance["go_file"] = os.path.basename(args.go)
                 provenance["go_rows"] = len(go.long)
-                go_res = axis_meta_go.run(go.long, p_thr=args.pthr, jaccard_cut=args.jaccard)
+                go_res = axis_meta_go.run(go.long, p_thr=args.pthr, jaccard_cut=args.jaccard,
+                                          pairs=pairs)
     if go_res is None:
         # empty matrix -> informative Meta-GO tab
         empty = pd.DataFrame(columns=["term_name", "term_id", "source", "n_sig",
@@ -305,7 +352,8 @@ def main(argv=None):
                   "directionality": pd.DataFrame(), "term_genes": {},
                   "contrast_corr": pd.DataFrame(), "contrast_order": [],
                   "contrast_shared": pd.DataFrame(), "contrast_relation": None}
-        provenance.setdefault("go_file", "absent - Meta-GO axis skipped")
+        provenance.setdefault("go_file", "disabled (--go none) - Meta-GO axis skipped"
+                              if go_disabled else "absent - Meta-GO axis skipped")
 
     # ---- Exploration axis ----
     # design factors (multi-factor: condition, batch, injection order...)
@@ -315,19 +363,28 @@ def main(argv=None):
             factors_df = io_layer.map_design_factors(stats.sample_int_cols, design_frame[0], design_frame[1])
             if factors_df is not None:
                 print(f"[Pathfinder] design factors tested: {', '.join(map(str, factors_df.columns))}")
+            dropped = [str(c) for c in design_frame[0].columns if io_layer.is_replicate_index(c)]
+            if dropped:
+                provenance["design_not_tested"] = (f"{', '.join(dropped)} (replicate index "
+                                                   "within a condition, not a factor)")
         except Exception as e:
             print(f"[Pathfinder] ⚠ design factors unusable ({type(e).__name__})")
 
     explore = axis_explore.run(stats, do_umap=not args.no_umap, factors_df=factors_df)
 
     # ---- Protein axis (which proteins carry the signature) ----
-    prots = axis_proteins.run(stats, p_thr=args.pthr)
+    prots = axis_proteins.run(stats, p_thr=args.pthr, pairs=pairs)
     # ---- WGCNA axis (co-expression structure computed upstream) ----
     wgcna = None
     try:
         _xls = pd.read_excel(args.stats, sheet_name=None)
         core_ids = list(prots["table"].head(200).index) if not prots["matrix"].empty else []
         wgcna = axis_wgcna.run(_xls, stats, core_ids=core_ids)
+        if wgcna:
+            # the set actually tested for module enrichment (reported as such)
+            wgcna["core_set_n"] = len(core_ids)
+            wgcna["core_set_rule"] = (f"top {len(core_ids)} proteins ranked by recurrence "
+                                      "then Pi-score")
     except Exception as e:
         print(f"[Pathfinder] \u26a0 WGCNA sheets unusable ({type(e).__name__}) - axis skipped.")
     if wgcna:
@@ -337,6 +394,10 @@ def main(argv=None):
     provenance["proteins_significant"] = (
         f"{prots['n_significant']} proteins significant in >=1 contrast (p.adj < {args.pthr})"
         + (" - ranked by recurrence then Pi-score" if prots.get("has_pi") else ""))
+    provenance["significance_rule"] = (
+        f"p.adj < {args.pthr}, no fold-change criterion"
+        + (f" ({provenance['p_adjust_upstream']}, as computed upstream)"
+           if provenance.get("p_adjust_upstream") else ""))
 
     # ---- Species (taxid) + Publications axis (online, opt-in) ----
     org_arg = args.org
@@ -406,7 +467,7 @@ def main(argv=None):
         "Samples": len(stats.sample_int_cols),
         "Proteins": len(stats.comp),
         "Significant GO cells": n_go_sig,
-        "Core proteins": prots["n_significant"],
+        "Significant proteins": prots["n_significant"],
         "PC1 variance": f"{explore['pca']['var_exp'][0]:.0f}%",
     }
 

@@ -45,13 +45,23 @@ def build_matrix(go_long: pd.DataFrame, p_thr: float = 0.05):
     return matrix, meta, df
 
 
-def directionality(matrix: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
-    """Per term: up / down contrasts and a compact pattern label."""
+def directionality(matrix: pd.DataFrame, meta: pd.DataFrame, pairs=None) -> pd.DataFrame:
+    """Per term: up / down contrasts and a compact pattern label.
+
+    pairs (axis_proteins.comparable_pairs): 'opposite' = term reversed between two
+    comparable contrasts (same comparison in different strata); 'mixed' = up in some
+    contrasts and down in others that compare different things. Without pairs, any
+    term both up and down is 'mixed' (legacy)."""
+    from axis_proteins import _reversals
     recs = []
     for key, row in matrix.iterrows():
         up = [c for c in matrix.columns if pd.notna(row[c]) and row[c] > 0]
         dn = [c for c in matrix.columns if pd.notna(row[c]) and row[c] < 0]
-        if up and dn:
+        rev = (_reversals({c: float(row[c]) for c in up + dn}, pairs)
+               if pairs and up and dn else [])
+        if rev:
+            pattern = "opposite"
+        elif up and dn:
             pattern = "mixed"
         elif up:
             pattern = "shared up" if len(up) > 1 else "specific up"
@@ -66,6 +76,7 @@ def directionality(matrix: pd.DataFrame, meta: pd.DataFrame) -> pd.DataFrame:
             "pattern": pattern,
             "up_in": ", ".join(up),
             "down_in": ", ".join(dn),
+            "opposite_in": "; ".join(rev),
         })
     out = pd.DataFrame(recs, index=matrix.index)
     return out.sort_values(["n_sig", "pattern"], ascending=[False, True])
@@ -196,10 +207,10 @@ def contrast_similarity(matrix: pd.DataFrame, min_shared: int = 3):
     return corr.loc[labels, labels], labels, shared.loc[labels, labels], rel
 
 
-def run(go_long: pd.DataFrame, p_thr: float = 0.05, jaccard_cut: float = 0.5):
+def run(go_long: pd.DataFrame, p_thr: float = 0.05, jaccard_cut: float = 0.5, pairs=None):
     matrix, meta, df = build_matrix(go_long, p_thr)
     meta = redundancy_clusters(go_long, matrix, meta, jaccard_cut)
-    direction = directionality(matrix, meta)
+    direction = directionality(matrix, meta, pairs)
     # accession sets per term (union of significant intersections) - for the GO UMAP
     sig = go_long[go_long["p_value"] < p_thr].copy()
     sig["key"] = np.where(sig["term_id"].astype(str).str.len() > 0,
@@ -216,4 +227,4 @@ def run(go_long: pd.DataFrame, p_thr: float = 0.05, jaccard_cut: float = 0.5):
     return {"matrix": matrix, "meta": meta, "directionality": direction,
             "term_genes": term_genes, "contrast_corr": ccorr,
             "contrast_order": corder, "contrast_shared": cshared,
-            "contrast_relation": crel}
+            "contrast_relation": crel, "pairs": pairs}

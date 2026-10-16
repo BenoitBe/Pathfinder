@@ -1,5 +1,70 @@
 # Changelog
 
+## v1.1.1 — 2026-10
+
+Corrections found on a real time-course × cultivar run (16 contrasts).
+
+### Fixed
+- **"Opposite regulation" was mostly an artefact of contrast orientation.** Any protein
+  (or GO term) up in one contrast and down in another was called opposite. Between
+  contrasts sharing a condition this only expresses an ordering (`A24_vs_A0` up and
+  `A24_vs_B24` down means A0 < A24 < B24); between unrelated contrasts it compares
+  different things. A reversal is now reported only between **comparable** contrasts:
+  no shared condition and log2FC profiles correlated over all proteins (|r| ≥ 0.3,
+  sign-aligned when one contrast is written the other way round). The others are
+  labelled `mixed`. On the run that revealed it: 279 "opposite" proteins → 1 reversal
+  and 278 mixed. New column `opposite_in` (the contrasts and fold-changes involved);
+  rule stated in the provenance. Without fold-changes the previous rule is kept.
+- **"Core" meant three different sets.** The headline card counts proteins significant
+  in at least half the contrasts, the module enrichment tested the top 200 ranked
+  proteins, and the verdict mixed the two ("the 1 recurrent proteins concentrate in
+  module blue, 92/676"). The chain and verdict now name the set actually tested
+  ("top 200 proteins ranked by recurrence then Pi-score").
+- **KPI "Core proteins" showed the number of significant proteins**: renamed
+  "Significant proteins".
+- **Contrast names cut at 22 characters** in the summary chain: the font now shrinks to
+  fit (cut only beyond 40 characters).
+
+### Added
+- **Quality: heterogeneous conditions.** The correlation check runs on all proteins and
+  misses a condition whose replicates sit at different stages of the response
+  (asynchronous development): r stayed at 0.95. The spread of each condition along the
+  PCs carrying the design is now compared with the median condition (flag at ≥ 2.5×,
+  about 1–2 % false alarms on homogeneous simulated designs), naming the replicates that
+  lie closer to another condition.
+
+## v1.1.0 — 2026-10
+
+Deimos integration: Pathfinder can run as Deimos' last step, reading an explicit,
+versioned contract instead of guessing.
+
+### Added
+- **Upstream manifest.** Deimos workbooks carry a hidden `_manifest` sheet (schema
+  `deimos-results` 1.x). Pathfinder takes the GO sheet → contrast mapping from it: Deimos
+  shortens sheet names (common affixes stripped, 12 characters per side, `#N` on
+  collision) and name parsing recognised only 1/6 to 0/12 of them on real naming
+  schemes. A contrast declared by the manifest but absent from the statistics is
+  reported, never re-guessed. The organism is read from the manifest before any
+  free-text scan; an unknown major schema version is reported loudly. Without a
+  manifest (older workbooks, Phobos) nothing changes.
+- `--go none`: disables Meta-GO **and** the GO auto-detection, which could otherwise
+  pick up the GO workbook of another project in the folder.
+- `--version`, and `__version__` in the provenance (was "Pathfinder v1").
+- The summary states the significance rule (`p.adj < pthr`, no fold-change criterion)
+  and, when the manifest provides it, the upstream volcano rule — so a report listing 3
+  proteins and a dashboard listing 128 no longer look contradictory.
+- Contract test on a real Deimos workbook (`tests/fixtures/`).
+
+### Fixed
+- **The replicate index is no longer tested as a design factor.** `replicate` / `rep`
+  (1, 2, 3 inside each condition, always present in Deimos designs) was tested against
+  every PC, doubling the BH family: on the Deimos example, condition ~ PC1 went from
+  p.adj 0.039 to 0.078. It is dropped and recorded in the provenance.
+- `normalise_org()` accepts `NCBI taxid 1304` / `taxid:1304` (Deimos STRING mode), so the
+  species is found in workbooks without a manifest. A taxid quoted inside free text (a
+  strain in a Methods detail) is deliberately not taken.
+- README: CI badge pointed to a repository that does not exist; test count.
+
 ## v1.0 — 2026-07
 
 First release.

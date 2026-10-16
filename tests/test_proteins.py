@@ -52,6 +52,157 @@ def workbook_proteins(tmp_path):
     return {"path": str(p), "contrasts": contrasts}
 
 
+class TestAnnotation:
+    """The join no single tab provides: which proteins, doing what, in which module."""
+
+    def _go(self, core_ids):
+        import axis_meta_go
+        rows = []
+        terms = [("unfolded protein binding", "GO:MF", core_ids[:5]),
+                 ("plastid stroma", "GO:CC", core_ids[3:9]),
+                 ("elsewhere", "GO:BP", ["ZZZ1", "ZZZ2"])]
+        for c in ("A_vs_B", "A_vs_C"):
+            for name, src, accs in terms:
+                rows.append([c, "s", src, f"GO:{abs(hash(name)) % 9999}", name,
+                             0.001, 1.5, list(accs)])
+        long = pd.DataFrame(rows, columns=["contrast", "sheet", "source", "term_id",
+                                           "term_name", "p_value", "z", "intersection"])
+        return axis_meta_go.run(long, p_thr=0.05)
+
+    def test_terms_and_module_are_joined(self, workbook_proteins):
+        stats = io_layer.load_stats(workbook_proteins["path"])
+        res = axis_proteins.run(stats)
+        core = list(res["table"].head(10).index)
+        go = self._go(core)
+        wg = {"assignment": pd.DataFrame({"protein": core, "module": ["blue"] * len(core)}),
+              "n_modules": 1}
+        t = axis_proteins.annotate(res["table"], go_res=go, wgcna=wg)
+        assert "module" in t.columns and "go_terms" in t.columns
+        assert (t.loc[core, "module"] == "blue").all()
+        assert int((t["n_go_terms"] > 0).sum()) >= 5
+
+    def test_protein_outside_any_term_is_left_blank(self, workbook_proteins):
+        stats = io_layer.load_stats(workbook_proteins["path"])
+        res = axis_proteins.run(stats)
+        core = list(res["table"].head(10).index)
+        t = axis_proteins.annotate(res["table"], go_res=self._go(core), wgcna=None)
+        far = t.index[-1]
+        assert t.loc[far, "n_go_terms"] == 0
+        assert t.loc[far, "go_terms"] == ""
+
+    def test_annotation_is_optional(self, workbook_proteins):
+        stats = io_layer.load_stats(workbook_proteins["path"])
+        res = axis_proteins.run(stats)
+        t = axis_proteins.annotate(res["table"], go_res=None, wgcna=None)
+        assert len(t) == len(res["table"])
+        assert "go_terms" not in t.columns
+
+
+class TestAnnotation:
+    """The join nobody else does: which proteins, carrying which functions, in which
+    module. The GO sheets hold the accessions behind each term; WGCNA holds the module."""
+
+    def _go(self, accs_by_term):
+        long = pd.DataFrame([
+            {"contrast": "A_vs_B", "sheet": "s", "source": src, "term_id": tid,
+             "term_name": name, "p_value": 1e-5, "z": 1.0, "intersection": accs}
+            for tid, (name, src, accs) in accs_by_term.items()])
+        import axis_meta_go
+        return axis_meta_go.run(long, p_thr=0.05)
+
+    def test_terms_and_module_are_attached(self, workbook_proteins):
+        go = self._go({"GO:1": ("protein folding", "GO:BP", [f"P{i:04d}" for i in range(5)]),
+                       "GO:2": ("plastid stroma", "GO:CC", [f"P{i:04d}" for i in range(5, 10)])})
+        wgcna = {"assignment": pd.DataFrame({
+            "protein": [f"P{i:04d}" for i in range(30)],
+            "module": ["blue"] * 10 + ["brown"] * 20})}
+        stats = io_layer.load_stats(workbook_proteins["path"])
+        t = axis_proteins.annotate(axis_proteins.run(stats)["table"], go, wgcna)
+        assert "protein folding" in t.loc["P0000", "go_terms"]
+        assert "plastid stroma" in t.loc["P0007", "go_terms"]
+        assert t.loc["P0000", "module"] == "blue"
+        assert t.loc["P0015", "module"] == "brown"
+
+    def test_a_protein_in_no_term_gets_an_empty_annotation(self, workbook_proteins):
+        go = self._go({"GO:1": ("protein folding", "GO:BP", [f"P{i:04d}" for i in range(5)])})
+        stats = io_layer.load_stats(workbook_proteins["path"])
+        t = axis_proteins.annotate(axis_proteins.run(stats)["table"], go, None)
+        assert t.loc["P0000", "n_go_terms"] == 1
+        assert t.loc["P0019", "n_go_terms"] == 0
+        assert t.loc["P0019", "go_terms"] == ""
+
+    def test_matching_works_on_gene_symbols_too(self, workbook_proteins):
+        """gProfiler may return gene symbols rather than accessions."""
+        go = self._go({"GO:1": ("protein folding", "GO:BP", ["G0000", "G0001"])})
+        stats = io_layer.load_stats(workbook_proteins["path"])
+        t = axis_proteins.annotate(axis_proteins.run(stats)["table"], go, None)
+        assert t.loc["P0000", "n_go_terms"] == 1        # P0000 -> gene G0000
+
+    def test_annotation_without_go_or_wgcna_is_harmless(self, workbook_proteins):
+        stats = io_layer.load_stats(workbook_proteins["path"])
+        base = axis_proteins.run(stats)["table"]
+        t = axis_proteins.annotate(base, None, None)
+        assert len(t) == len(base)
+        assert "go_terms" not in t.columns
+
+
+class TestAnnotationJoin:
+    """The join nobody else does: which proteins, doing what, in which module."""
+
+    def _go(self, core_ids):
+        """GO result where two terms are carried by known core proteins."""
+        keys = ["GO:0006457", "GO:0009570"]
+        meta = pd.DataFrame({"term_name": ["protein folding", "plastid stroma"],
+                             "term_id": keys, "source": ["GO:BP", "GO:CC"],
+                             "n_sig": [6, 4], "redundancy_cluster": [1, 2],
+                             "is_representative": [True, True]}, index=keys)
+        return {"matrix": pd.DataFrame({"A_vs_B": [2.0, 1.0]}, index=keys),
+                "meta": meta,
+                "term_genes": {keys[0]: set(core_ids[:20]), keys[1]: set(core_ids[10:30])}}
+
+    def _wgcna(self, core_ids):
+        return {"n_modules": 2,
+                "assignment": pd.DataFrame({"protein": core_ids + ["P0500"],
+                                            "module": ["blue"] * len(core_ids) + ["brown"]})}
+
+    def test_terms_and_module_are_joined(self, workbook_proteins):
+        stats = io_layer.load_stats(workbook_proteins["path"])
+        res = axis_proteins.run(stats)
+        core = [f"P{i:04d}" for i in range(30)]
+        t = axis_proteins.annotate(res["table"], self._go(core), self._wgcna(core))
+        assert "go_terms" in t.columns and "module" in t.columns
+        assert t.loc["P0000", "module"] == "blue"
+
+    def test_each_protein_gets_only_its_own_terms(self, workbook_proteins):
+        """A protein must not inherit terms it is not part of."""
+        stats = io_layer.load_stats(workbook_proteins["path"])
+        res = axis_proteins.run(stats)
+        core = [f"P{i:04d}" for i in range(30)]
+        t = axis_proteins.annotate(res["table"], self._go(core), self._wgcna(core))
+        assert "protein folding" in t.loc["P0005", "go_terms"]      # in 0..19 only
+        assert "plastid stroma" not in t.loc["P0005", "go_terms"]
+        assert "protein folding" in t.loc["P0015", "go_terms"]      # in both
+        assert "plastid stroma" in t.loc["P0015", "go_terms"]
+        assert "plastid stroma" in t.loc["P0025", "go_terms"]       # in 10..29 only
+        assert "protein folding" not in t.loc["P0025", "go_terms"]
+
+    def test_term_count_matches(self, workbook_proteins):
+        stats = io_layer.load_stats(workbook_proteins["path"])
+        res = axis_proteins.run(stats)
+        core = [f"P{i:04d}" for i in range(30)]
+        t = axis_proteins.annotate(res["table"], self._go(core), self._wgcna(core))
+        assert t.loc["P0015", "n_go_terms"] == 2
+        assert t.loc["P0005", "n_go_terms"] == 1
+
+    def test_annotation_is_optional(self, workbook_proteins):
+        """No GO, no WGCNA: the table must still stand."""
+        stats = io_layer.load_stats(workbook_proteins["path"])
+        res = axis_proteins.run(stats)
+        t = axis_proteins.annotate(res["table"], None, None)
+        assert len(t) == len(res["table"])
+        assert "go_terms" not in t.columns
+
+
 class TestProteinMatrix:
     def test_only_significant_proteins_are_kept(self, workbook_proteins):
         stats = io_layer.load_stats(workbook_proteins["path"])

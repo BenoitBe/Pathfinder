@@ -483,8 +483,12 @@ def _svg_chain(conv):
                  f"fill='{PANEL}' stroke='{colour}' stroke-width='1.5'/>")
         s.append(f"<text x='{x+14}' y='{y+19}' fill='{MUT}' font-size='10' "
                  f"letter-spacing='0.06em'>{_esc(title.upper())}</text>")
-        s.append(f"<text x='{x+14}' y='{y+43}' fill='#fff' font-size='19' "
-                 f"font-weight='700'>{_esc(str(value)[:22])}</text>")
+        val = str(value)
+        if len(val) > 40:
+            val = val[:39] + "…"
+        fs = 19 if len(val) <= 20 else max(11, int(19 * 20 / len(val)))   # fit, don't cut
+        s.append(f"<text x='{x+14}' y='{y+43}' fill='#fff' font-size='{fs}' "
+                 f"font-weight='700'>{_esc(val)}</text>")
         s.append(f"<text x='{x+14}' y='{y+63}' fill='{MUT}' font-size='10'>"
                  f"{_esc(str(detail)[:44])}</text>")
         s.append("</g>")
@@ -496,7 +500,8 @@ def _svg_chain(conv):
         s.append(f"<path d='M{x+gap-14},{y+box_h/2} l-8,-5 l0,10 z' fill='{col}'/>")
 
     linked = bool(conv.get("module"))
-    box(0, "core signature", f"{conv['core_n']} proteins", "recurrent across contrasts", BLUE)
+    box(0, conv.get("core_title", "core signature"), f"{conv['core_n']} proteins",
+        conv.get("core_detail", "recurrent across contrasts"), BLUE)
     arrow(box_w, linked)
     if linked:
         box(box_w + gap, "co-expression module", conv["module"],

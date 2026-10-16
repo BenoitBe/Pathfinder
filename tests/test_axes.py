@@ -161,7 +161,7 @@ class TestExploration:
         factors = io_layer.map_design_factors(stats.sample_int_cols, frame, label_col)
         res = axis_explore.run(stats, do_umap=False, factors_df=factors)
         multi = res["pc_factor_multi"]
-        assert set(multi["factor"]) == {"condition", "replicate", "injection_order"}
+        assert set(multi["factor"]) == {"condition", "injection_order"}   # replicate index dropped
         num = multi[multi["factor"] == "injection_order"]
         assert (num["test"] == "Spearman").all()
         cat = multi[multi["factor"] == "condition"]

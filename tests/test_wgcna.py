@@ -21,7 +21,9 @@ def workbook_wgcna(tmp_path):
     n = 500
 
     comp = pd.DataFrame({"Protein.Group": [f"P{i:04d}" for i in range(n)],
-                         "Genes": [f"G{i:04d}" for i in range(n)]})
+                         "Genes": [f"G{i:04d}" for i in range(n)],
+                         "First.Protein.Description": [f"Synthetic protein {i} (test)"
+                                                        for i in range(n)]})
     for c in contrasts:
         p, d, pi = np.ones(n), np.zeros(n), np.zeros(n)
         p[:30] = 1e-8                                   # core = P0000..P0029
@@ -172,3 +174,24 @@ class TestHubs:
         for _, grp in h.groupby("module"):
             v = grp["hub_score"].values
             assert (v[:-1] >= v[1:]).all()
+
+    def test_hub_description_is_joined_from_the_stats_workbook(self, workbook_wgcna):
+        res, _ = _run(workbook_wgcna)
+        h = res["hubs"]
+        assert "description" in h.columns
+        assert (h["description"] != "").all()
+        for prot, desc in zip(h["protein"], h["description"]):
+            assert desc == f"Synthetic protein {int(prot[1:])} (test)"
+
+    def test_missing_description_column_does_not_crash(self, workbook_wgcna, tmp_path):
+        """No First.Protein.Description / Protein.Names / Description in the workbook:
+        the hub table must still be produced, just without that column."""
+        xls = pd.read_excel(workbook_wgcna["path"], sheet_name=None)
+        stats = io_layer.load_stats(workbook_wgcna["path"],
+                                    design_map=io_layer.load_design(workbook_wgcna["design"]))
+        stats.desc_col = None
+        prots = axis_proteins.run(stats)
+        core = list(prots["table"].head(30).index)
+        res = axis_wgcna.run(xls, stats, core_ids=core)
+        assert not res["hubs"].empty
+        assert "description" not in res["hubs"].columns

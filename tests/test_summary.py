@@ -166,6 +166,45 @@ class TestContrastSection:
         md = self._build(rows, workbook_full)
         assert "largely unrelated" in md or "Closest independent" not in md
 
+    def test_few_contrasts_stay_one_line_each(self, workbook_full):
+        """Below the grouping threshold, per-contrast detail must stay literal."""
+        rng = np.random.default_rng(9)
+        rows = []
+        for c in ["A_vs_B", "C_vs_D", "E_vs_F"]:
+            for i in range(20):
+                rows.append([c, "s", "GO:BP", f"GO:{i}", f"t{i}", 0.001,
+                             rng.normal(0, 1.5), ["P1"]])
+        md = self._build(rows, workbook_full)
+        detail = md.split("## Per-contrast detail")[1]
+        assert "- A_vs_B: 20 significantly enriched terms." in detail
+        assert "Family 1" not in detail
+
+    def test_many_contrasts_are_grouped_into_families(self, workbook_full):
+        """REGRESSION: 28 unread per-contrast lines -> a handful of families instead.
+
+        Three blocks of contrasts share a near-identical GO profile (r ~ 1 within
+        a block); the fourth is pure noise. With 12 contrasts (> MIN_CONTRASTS_FOR_FAMILIES),
+        the detail section must read as families, not 12 individual bullets.
+        """
+        rng = np.random.default_rng(10)
+        prof = {0: rng.normal(0, 1.5, 60), 1: rng.normal(0, 1.5, 60), 2: rng.normal(0, 1.5, 60)}
+        rows = []
+        contrasts = [f"X{i}_vs_Y{i}" for i in range(12)]
+        for i, c in enumerate(contrasts):
+            block = i % 4
+            if block < 3:
+                z = prof[block] + rng.normal(0, 0.05, 60)   # near-identical within block
+            else:
+                z = rng.normal(0, 1.5, 60)                  # unrelated singleton
+            for k, zz in enumerate(z):
+                rows.append([c, "s", "GO:BP", f"GO:{k}", f"t{k}", 0.001, zz, ["P1"]])
+        md = self._build(rows, workbook_full)
+        detail = md.split("## Per-contrast detail")[1]
+        assert "Family 1" in detail
+        assert "families summarising 12 contrasts" in detail
+        # a tightly correlated block must not be spelled out as 3 separate bullets
+        assert detail.count(": 60 significantly enriched terms.") < len(contrasts)
+
 
 class TestFunctionalSection:
     def test_absent_go_is_stated(self, workbook_full):
