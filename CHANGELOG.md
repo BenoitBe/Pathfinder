@@ -2,6 +2,9 @@
 
 ## v1.1.1 — 2026-10
 
+CI: the v1.1.0 `io_layer.py` / `species.py` (manifest reader, replicate index) were
+missing from the pushed tree; actions bumped to checkout@v5 / setup-python@v6 (Node 24).
+
 Corrections found on a real time-course × cultivar run (16 contrasts).
 
 ### Fixed
@@ -26,6 +29,14 @@ Corrections found on a real time-course × cultivar run (16 contrasts).
   fit (cut only beyond 40 characters).
 
 ### Added
+- **Protein annotation** (`axis_proteins.annotate`): for each significant protein, the
+  significant GO/pathway terms it belongs to (`go_terms`, `n_go_terms`) and its WGCNA
+  module (`module`), matched on accession or gene symbol; columns in Proteins_core and
+  the Proteins tab.
+- **Contrast families**: above 8 contrasts, the per-contrast detail groups contrasts
+  whose GO signatures correlate at r ≥ 0.5 into families instead of one line each.
+- **Hub descriptions**: the WGCNA hub table carries the protein description from the
+  statistics workbook when available.
 - **Quality: heterogeneous conditions.** The correlation check runs on all proteins and
   misses a condition whose replicates sit at different stages of the response
   (asynchronous development): r stayed at 0.95. The spread of each condition along the

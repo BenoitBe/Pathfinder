@@ -387,6 +387,10 @@ def main(argv=None):
                                       "then Pi-score")
     except Exception as e:
         print(f"[Pathfinder] \u26a0 WGCNA sheets unusable ({type(e).__name__}) - axis skipped.")
+    # which proteins, doing what, in which module (GO terms + WGCNA module per protein)
+    if not prots["matrix"].empty:
+        go_for_ann = go_res if (go_res and not go_res["matrix"].empty) else None
+        prots["table"] = axis_proteins.annotate(prots["table"], go_for_ann, wgcna)
     if wgcna:
         print(f"[Pathfinder] WGCNA: {wgcna['n_modules']} module(s) read from the workbook")
         provenance["wgcna_modules"] = f"{wgcna['n_modules']} modules (read, not recomputed)"

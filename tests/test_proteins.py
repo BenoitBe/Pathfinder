@@ -52,7 +52,7 @@ def workbook_proteins(tmp_path):
     return {"path": str(p), "contrasts": contrasts}
 
 
-class TestAnnotation:
+class TestAnnotationBasics:
     """The join no single tab provides: which proteins, doing what, in which module."""
 
     def _go(self, core_ids):

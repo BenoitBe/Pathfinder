@@ -266,6 +266,28 @@ def _go_section(meta_go):
     return lines
 
 
+MIN_CONTRASTS_FOR_FAMILIES = 8   # above this, per-contrast lines are grouped into families
+FAMILY_R = 0.5                   # GO-signature correlation within a family (average linkage)
+
+
+def _contrast_families(cc, contrasts):
+    """Groups of contrasts with near-identical GO signatures: average-linkage clustering
+    on 1 - r (pairs without enough shared terms count as unrelated), cut at r = FAMILY_R."""
+    from scipy.cluster.hierarchy import linkage, fcluster
+    from scipy.spatial.distance import squareform
+    cc = cc.reindex(index=contrasts, columns=contrasts)
+    d = 1.0 - cc.values.astype(float)
+    d = np.where(np.isfinite(d), d, 1.0)
+    np.fill_diagonal(d, 0.0)
+    d = np.clip((d + d.T) / 2.0, 0.0, 2.0)
+    labels = fcluster(linkage(squareform(d, checks=False), method="average"),
+                      t=1.0 - FAMILY_R, criterion="distance")
+    fams = {}
+    for c, l in zip(contrasts, labels):
+        fams.setdefault(l, []).append(c)
+    return list(fams.values())
+
+
 def _contrast_section(meta_go):
     matrix = meta_go["matrix"]
     if matrix.empty:
@@ -325,7 +347,28 @@ def _contrast_section(meta_go):
             if notes:
                 lines.append("Excluded from the statements above: " + "; ".join(notes) + ".")
     counts = matrix.notna().sum(axis=0).sort_values(ascending=False)
-    lines += [f"{c}: {int(n)} significantly enriched terms." for c, n in counts.items()]
+    literal = [f"{c}: {int(n)} significantly enriched terms." for c, n in counts.items()]
+    if len(counts) <= MIN_CONTRASTS_FOR_FAMILIES or cc is None or cc.empty:
+        return lines + literal
+    fams = _contrast_families(cc, list(counts.index))
+    if not any(len(f) > 1 for f in fams):
+        return lines + literal
+    fams.sort(key=lambda f: (-len(f), -float(counts[f].mean())))
+    lines.append(f"{len(fams)} families summarising {len(counts)} contrasts (GO signatures "
+                 f"correlated at r ≥ {FAMILY_R} within a family; a family may gather contrasts "
+                 "sharing a condition, whose similarity is partly mechanical):")
+    k = 0
+    for fam in fams:
+        if len(fam) == 1:
+            c = fam[0]
+            lines.append(f"{c}: {int(counts[c])} significantly enriched terms.")
+            continue
+        k += 1
+        sub = cc.reindex(index=fam, columns=fam).values.astype(float)
+        r = np.nanmean(sub[~np.eye(len(fam), dtype=bool)])
+        n = counts[fam]
+        lines.append(f"Family {k} — {len(fam)} contrasts (mean r={r:+.2f}, "
+                     f"{int(n.min())}–{int(n.max())} terms each): {', '.join(fam)}.")
     return lines
 
 

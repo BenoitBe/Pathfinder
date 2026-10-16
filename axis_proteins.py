@@ -14,6 +14,8 @@ it, is carried through as a confidence column.
 """
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import pandas as pd
 
@@ -195,6 +197,59 @@ def rank_core(meta: pd.DataFrame, matrix: pd.DataFrame):
     out["core_score"] = out["recurrence"] + 0.25 * out["pi_rank"]
     sort_cols = ["n_sig", "best_pi"] if "best_pi" in out.columns else ["n_sig", "max_abs_lfc"]
     return out.sort_values(sort_cols, ascending=False)
+
+
+def _keys(pid, gene) -> set:
+    """Identifiers a protein can be matched on: its accession and its gene symbol(s)
+    (gProfiler / STRING may return symbols rather than accessions)."""
+    out = {str(pid).strip().upper()}
+    g = "" if gene is None else str(gene)
+    if g and g.lower() not in ("nan", "none"):
+        out |= {x.strip().upper() for x in re.split(r"[;,]", g) if x.strip()}
+    return out
+
+
+def annotate(table: pd.DataFrame, go_res=None, wgcna=None, max_terms: int = 8):
+    """The join no single tab provides: which proteins, doing what, in which module.
+
+    go_res (axis_meta_go.run): adds `go_terms` (names of the significant terms whose
+    genes include the protein, most recurrent first, at most `max_terms` listed) and
+    `n_go_terms` (all of them). wgcna (axis_wgcna.run): adds `module`. Proteins are
+    matched on accession or gene symbol. Without GO nor WGCNA the table is returned
+    unchanged."""
+    out = table.copy()
+    meta = (go_res or {}).get("meta")
+    term_genes = (go_res or {}).get("term_genes") or {}
+    has_go = bool(term_genes) and meta is not None and len(meta) > 0
+    assign = (wgcna or {}).get("assignment")
+    has_wg = assign is not None and not assign.empty
+    if not (has_go or has_wg):
+        return out
+    genes = out["gene"].tolist() if "gene" in out.columns else [None] * len(out)
+    keys = [_keys(i, g) for i, g in zip(out.index, genes)]
+    if has_go:
+        inv = {}
+        for tkey, accs in term_genes.items():
+            for acc in accs:
+                inv.setdefault(str(acc).strip().upper(), set()).add(tkey)
+        n_sig = meta["n_sig"] if "n_sig" in meta.columns else pd.Series(0, index=meta.index)
+        name = meta["term_name"] if "term_name" in meta.columns else pd.Series(meta.index, index=meta.index)
+
+        def _order(t):
+            return (-int(n_sig.get(t, 0) or 0), str(name.get(t, t)))
+        labels, counts = [], []
+        for ks in keys:
+            terms = set().union(*(inv.get(k, set()) for k in ks))
+            names = list(dict.fromkeys(str(name.get(t, t)) for t in sorted(terms, key=_order)))
+            counts.append(len(terms))
+            labels.append("; ".join(names[:max_terms]) + ("; …" if len(names) > max_terms else ""))
+        out["n_go_terms"] = counts
+        out["go_terms"] = labels
+    if has_wg:
+        mod = {str(p).strip().upper(): str(m)
+               for p, m in zip(assign["protein"], assign["module"])}
+        out["module"] = [next((mod[k] for k in ks if k in mod), "") for ks in keys]
+    return out
 
 
 def run(stats, p_thr: float = 0.05, pairs="auto"):

@@ -272,6 +272,14 @@ def run(xls, stats, core_ids=None):
     all_ids = stats.comp[stats.id_col].astype(str).tolist() if stats.id_col in stats.comp.columns else None
     enrich = core_enrichment(w["assignment"], core_ids or [], all_ids)
     hub = hubs(w["assignment"], w["kme"])
+    desc_col = getattr(stats, "desc_col", None)
+    if hub is not None and not hub.empty and desc_col and desc_col in stats.comp.columns \
+            and stats.id_col in stats.comp.columns:
+        # what each hub is: description joined from the statistics workbook
+        d = dict(zip(stats.comp[stats.id_col].astype(str).str.split(";").str[0].str.strip(),
+                     stats.comp[desc_col].fillna("").astype(str)))
+        hub = hub.copy()
+        hub["description"] = [d.get(str(x).split(";")[0].strip(), "") for x in hub["protein"]]
     n_mod = 0
     if w["assignment"] is not None:
         n_mod = int(sum(1 for m in w["assignment"]["module"].unique() if not _is_grey(m)))

@@ -902,7 +902,8 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
         top = t.head(40)
         hm = svg_protein_heatmap(m.reindex(top.index), top)
         cols = [c for c in ("gene", "n_sig", "pattern", "best_pi", "median_robustness",
-                            "max_abs_lfc", "up_in", "down_in") if c in t.columns]
+                            "max_abs_lfc", "module", "go_terms", "up_in", "down_in")
+                if c in t.columns]
         tbl = _table(t[cols].head(30).reset_index().rename(columns={"index": "protein"}),
                      max_rows=30)
         cc = prots.get("contrast_corr")

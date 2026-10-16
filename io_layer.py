@@ -124,9 +124,21 @@ def load_design_frame(path_or_df):
     return df, label_col
 
 
+# Replicate index columns: a running number INSIDE each condition (1, 2, 3 in every
+# group). Testing it against the PCs is meaningless and doubles the BH family; a real
+# processing batch belongs in its own column (batch, plate, day...).
+_REPLICATE_INDEX = {"replicate", "rep", "replicat"}
+
+
+def is_replicate_index(col) -> bool:
+    return _norm(col) in _REPLICATE_INDEX
+
+
 def map_design_factors(sample_cols, df, label_col, cond_map=None):
     """Align sample columns with design rows (by name, else positionally) and return
-    a DataFrame indexed by sample column, one column per factor."""
+    a DataFrame indexed by sample column, one column per factor.
+
+    The replicate index column (replicate / rep) is not a factor and is dropped."""
     labels = [str(x).strip() for x in df[label_col].tolist()]
     matched = match_columns_to_labels(sample_cols, labels)
     if len(matched) == len(sample_cols):
@@ -137,7 +149,7 @@ def map_design_factors(sample_cols, df, label_col, cond_map=None):
         return None
     out = df.iloc[rows].copy()
     out.index = sample_cols
-    keep = [c for c in out.columns if c != label_col]
+    keep = [c for c in out.columns if c != label_col and not is_replicate_index(c)]
     return out[keep]
 
 
@@ -338,6 +350,56 @@ def load_stats(path: str, design_map=None) -> StatsData:
 
 
 # --------------------------------------------------------------------------- #
+# Upstream manifest (Deimos -> Pathfinder contract)                            #
+# --------------------------------------------------------------------------- #
+MANIFEST_SHEET = "_manifest"
+SUPPORTED_SCHEMA_MAJOR = 1
+
+
+def read_manifest(source):
+    """{section: {key: value}} from the hidden '_manifest' sheet, or {} if absent.
+
+    `source` is a workbook path or the {sheet: DataFrame} dict of pd.read_excel(...,
+    sheet_name=None). The manifest is written by Deimos >= schema 1.0: one fact per row,
+    columns section | key | value. Older workbooks and Phobos have none."""
+    if isinstance(source, dict):
+        df = source.get(MANIFEST_SHEET)
+    else:
+        try:
+            df = pd.read_excel(source, sheet_name=MANIFEST_SHEET, dtype=str)
+        except Exception:
+            return {}
+    if df is None or not {"section", "key", "value"} <= set(map(str, df.columns)):
+        return {}
+    out = {}
+    sub = df[["section", "key", "value"]].astype(object).fillna("")
+    for s, k, v in sub.itertuples(index=False):
+        s, k, v = str(s).strip(), str(k).strip(), str(v).strip()
+        if s and k:
+            out.setdefault(s, {})[k] = v
+    return out
+
+
+def manifest_version_warning(manifest):
+    """Explicit message when the manifest comes from an unknown major schema version,
+    None otherwise (no manifest, or a supported version)."""
+    if not manifest:
+        return None
+    schema = manifest.get("schema", {})
+    version = schema.get("version", "")
+    try:
+        major = int(str(version).split(".")[0])
+    except ValueError:
+        return (f"upstream manifest without a readable schema version ({version!r}): "
+                "the workbook layout may not be the one this Pathfinder expects.")
+    if major != SUPPORTED_SCHEMA_MAJOR:
+        return (f"upstream manifest schema {schema.get('name', '?')} {version}: this "
+                f"Pathfinder reads schema {SUPPORTED_SCHEMA_MAJOR}.x - sheets or columns "
+                "may have been renamed. Update Pathfinder, or check the outputs.")
+    return None
+
+
+# --------------------------------------------------------------------------- #
 # GO                                                                            #
 # --------------------------------------------------------------------------- #
 def _sheet_variants(a, b):
@@ -455,12 +517,32 @@ def _map_go_sheet(sheet, contrasts, conditions=None):
     return None, "UNMATCHED"
 
 
+def _map_from_manifest(sheet, by_manifest, contrasts):
+    """Contrast declared for a GO sheet by the upstream manifest. Returns (contrast, how),
+    or None when the manifest says nothing about this sheet.
+
+    The manifest is the source of truth: a declared contrast absent from the stats is
+    reported as unmatched, never re-guessed from the sheet name."""
+    if sheet not in by_manifest:
+        return None
+    declared = by_manifest[sheet]
+    if not contrasts:
+        return declared, "manifest"
+    if declared in contrasts:
+        return declared, "manifest"
+    by_norm = {_norm(c): c for c in contrasts}
+    if _norm(declared) in by_norm:
+        return by_norm[_norm(declared)], "manifest"
+    return None, f"UNMATCHED (manifest declares '{declared}', absent from the stats)"
+
+
 def load_go(path: str, contrasts, conditions=None, verbose=True) -> GOData:
     xls = pd.read_excel(path, sheet_name=None)
     go_sheets = {n: d for n, d in xls.items() if str(n).lower().startswith("go")
                  and _find_col(d.columns, "term_name")}
     if not go_sheets:
         raise ValueError("Aucune sheet 'GO_*' avec colonne 'term_name' : fichier GO non reconnu.")
+    by_manifest = read_manifest(xls).get("go_sheet", {})
 
     # columns detected on the first sheet, assumed homogeneous
     sample_df = next(iter(go_sheets.values()))
@@ -474,7 +556,10 @@ def load_go(path: str, contrasts, conditions=None, verbose=True) -> GOData:
     # map every GO sheet to a contrast, exactly, and report any problem loudly
     mapping, how = {}, {}
     for sheet in go_sheets:
-        if contrasts:
+        declared = _map_from_manifest(str(sheet), by_manifest, contrasts)
+        if declared is not None:
+            c, h = declared
+        elif contrasts:
             c, h = _map_go_sheet(sheet, contrasts, conditions)
         else:
             c, h = sheet, "no contrast list"
@@ -525,6 +610,7 @@ def load_go(path: str, contrasts, conditions=None, verbose=True) -> GOData:
                 contrasts=sorted(long["contrast"].dropna().unique().tolist()) if len(long) else [])
     go.mapping = mapping
     go.mapping_how = how
+    go.from_manifest = sum(1 for h in how.values() if h == "manifest")
     go.unmatched = unmatched
     go.duplicates = dupes
     go.missing = missing

@@ -27,7 +27,11 @@ COMMON = {
 
 
 def normalise_org(value):
-    """Accept 'hsapiens', 'Homo sapiens', 'human', or a numeric taxid -> (taxid, org)."""
+    """Accept 'hsapiens', 'Homo sapiens', 'human', a numeric taxid, or a labelled taxid
+    ('NCBI taxid 1304', 'taxid:1304', as Deimos writes it in STRING mode) -> (taxid, org).
+
+    The labelled form must be the whole value: a taxid quoted inside free text (e.g. a
+    strain in a Methods detail) is not the organism the analysis ran on."""
     if value is None:
         return None, None
     v = str(value).strip()
@@ -35,6 +39,9 @@ def normalise_org(value):
         return None, None
     if v.isdigit():
         return int(v), None
+    m = re.fullmatch(r"(?:ncbi[\s_-]*)?tax(?:on)?[\s_-]*id[\W_]{0,3}(\d+)", v, re.I)
+    if m:
+        return int(m.group(1)), None
     key = re.sub(r"[^a-z]", "", v.lower())
     if key in GPROFILER_TO_TAXID:
         return GPROFILER_TO_TAXID[key], key
@@ -57,6 +64,22 @@ def detect_org_in_workbook(path):
         sheets = pd.read_excel(path, sheet_name=None)
     except Exception:
         return None
+    # 1) the upstream manifest states the organism the analysis actually ran on
+    #    (STRING taxid in STRING mode, g:Profiler code otherwise): it wins.
+    org = sheets.get("_manifest")
+    if org is not None and {"section", "key", "value"} <= set(map(str, org.columns)):
+        rows = org[org["section"].astype(str) == "organism"]
+        o = dict(zip(rows["key"].astype(str), rows["value"]))
+        for k in ("taxid", "gprofiler"):
+            v = o.get(k)
+            if v is not None and pd.notna(v):
+                if isinstance(v, float) and v.is_integer():
+                    v = int(v)
+                taxid, name = normalise_org(str(v).strip())
+                if taxid:
+                    return name or str(taxid)
+
+    # 2) otherwise scan key/value sheets (Methods...) for an organism entry
     keys = ("go_organism", "organism", "species", "espece", "taxid", "gprofiler")
     for name, df in sheets.items():
         if df.empty:
