@@ -64,16 +64,20 @@ def _parse_pmid(tsv, top=15):
     return rows[:top]
 
 
-def _sig_identifiers(stats, contrast, p_thr, max_ids):
+def _sig_identifiers(stats, contrast, p_thr, max_ids, rule=None):
     """Genes (default) or accessions of a contrast's significant proteins, ranked by |LFC|.
+    rule: io_layer.SelectionRule (upstream volcano rule); None = p.adj < p_thr.
 
     Returns (ids, n_total) so the caller can tell a small signature from a capped one.
     """
+    from io_layer import SelectionRule
+    rule = rule or SelectionRule(p_thr=p_thr)
     comp = stats.comp
-    padj, diff = f"{contrast}_p.adj", f"{contrast}_diff"
-    if padj not in comp.columns:
+    pcol, diff = f"{contrast}_{rule.p_column}", f"{contrast}_diff"
+    if pcol not in comp.columns or (rule.lfc_min > 0 and diff not in comp.columns):
         return [], 0
-    sub = comp[pd.to_numeric(comp[padj], errors="coerce") < p_thr].copy()
+    d = comp[diff] if diff in comp.columns else pd.Series(0.0, index=comp.index)
+    sub = comp[rule.mask(comp[pcol], d)].copy()
     if diff in comp.columns:
         sub["_abs"] = pd.to_numeric(sub[diff], errors="coerce").abs()
         sub = sub.sort_values("_abs", ascending=False)
@@ -88,16 +92,19 @@ def _sig_identifiers(stats, contrast, p_thr, max_ids):
     return out[:max_ids], n_total
 
 
-def run(stats, taxid, p_thr=0.05, max_ids=400, top_pmid=15, refresh=False, fetcher=None):
+def run(stats, taxid, p_thr=0.05, max_ids=400, top_pmid=15, refresh=False, fetcher=None,
+        rule=None):
+    from io_layer import SelectionRule
+    rule = rule or SelectionRule(p_thr=p_thr)
     fetch = fetcher or _string_request
     results, prov = {}, {}
-    prov["_criterion"] = (f"significant proteins: p.adj < {p_thr} | max {max_ids} genes per query "
+    prov["_criterion"] = (f"significant proteins: {rule.text()} | max {max_ids} genes per query "
                           f"(ranked by |LFC|) | top {top_pmid} PMIDs kept per contrast")
     n_skipped = 0
     for c in stats.contrasts:
-        ids, n_total = _sig_identifiers(stats, c, p_thr, max_ids)
+        ids, n_total = _sig_identifiers(stats, c, p_thr, max_ids, rule=rule)
         if n_total == 0:
-            prov[c] = f"no protein with p.adj < {p_thr} - skipped"
+            prov[c] = f"no protein with {rule.text()} - skipped"
             n_skipped += 1
             continue
         if n_total < MIN_GENES:

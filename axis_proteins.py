@@ -7,10 +7,11 @@ The Meta-GO axis answers "which functions do these contrasts share"; this one an
 Core object: a `protein x contrast` matrix of log2 fold-changes, masked by
 significance (NaN = not significant, never 0).
 
-Ranking uses the Pi-score (|LFC| x -log10 p, computed upstream): it is a ranking
-statistic, not a testable one, so it orders proteins but never selects them - the
-selection stays on the adjusted p-value. Robustness, when the upstream module provides
-it, is carried through as a confidence column.
+Selection follows the upstream rule (io_layer.SelectionRule: the Deimos volcano rule
+read from the manifest), so the proteins are exactly those Deimos reports. Ranking uses
+the Pi-score (|LFC| x -log10 p, computed upstream): it is a ranking statistic, not a
+testable one, so it orders proteins but never selects them. Robustness, when the
+upstream module provides it, is carried through as a confidence column.
 """
 from __future__ import annotations
 
@@ -35,27 +36,34 @@ def _find_contrast_col(comp, contrast, kinds):
     return None
 
 
-def build_matrix(stats, p_thr: float = 0.05):
-    """protein x contrast matrix of significant log2 fold-changes + per-protein meta."""
+_P_KINDS = {"p.adj": ["p.adj", "padj", "p_adj"], "p.val": ["p.val", "pvalue", "p_val", "p.value"]}
+
+
+def build_matrix(stats, p_thr: float = 0.05, rule=None):
+    """protein x contrast matrix of significant log2 fold-changes + per-protein meta.
+    rule: io_layer.SelectionRule; None = p.adj < p_thr without fold-change criterion."""
+    from io_layer import SelectionRule
+    rule = rule or SelectionRule(p_thr=p_thr)
     comp = stats.comp
     idx = comp[stats.id_col].astype(str) if stats.id_col in comp.columns \
         else pd.Series([f"row{i}" for i in range(len(comp))])
 
     lfc, pi, rob = {}, {}, {}
     for c in stats.contrasts:
-        p_col = _find_contrast_col(comp, c, ["p.adj", "padj", "p_adj"])
+        p_col = _find_contrast_col(comp, c, _P_KINDS.get(rule.p_column, _P_KINDS["p.adj"]))
         d_col = _find_contrast_col(comp, c, ["diff", "logfc", "lfc"])
         if p_col is None or d_col is None:
             continue
         p = pd.to_numeric(comp[p_col], errors="coerce")
         d = pd.to_numeric(comp[d_col], errors="coerce")
-        lfc[c] = np.where(p < p_thr, d, np.nan)
+        sel = rule.mask(p, d)
+        lfc[c] = np.where(sel, d, np.nan)
         pi_col = _find_contrast_col(comp, c, ["pi_score", "piscore", "pi"])
         if pi_col is not None:
-            pi[c] = np.where(p < p_thr, pd.to_numeric(comp[pi_col], errors="coerce"), np.nan)
+            pi[c] = np.where(sel, pd.to_numeric(comp[pi_col], errors="coerce"), np.nan)
         rob_col = _find_contrast_col(comp, c, ["robustness_score", "robustness", "robust"])
         if rob_col is not None:
-            rob[c] = np.where(p < p_thr, pd.to_numeric(comp[rob_col], errors="coerce"), np.nan)
+            rob[c] = np.where(sel, pd.to_numeric(comp[rob_col], errors="coerce"), np.nan)
 
     matrix = pd.DataFrame(lfc, index=idx.values)
     keep = matrix.notna().any(axis=1).values          # proteins significant somewhere
@@ -252,12 +260,13 @@ def annotate(table: pd.DataFrame, go_res=None, wgcna=None, max_terms: int = 8):
     return out
 
 
-def run(stats, p_thr: float = 0.05, pairs="auto"):
+def run(stats, p_thr: float = 0.05, pairs="auto", rule=None):
     """pairs: 'auto' (computed from the fold-changes), a dict from comparable_pairs,
-    or None (no comparability information: legacy 'opposite' rule)."""
+    or None (no comparability information: legacy 'opposite' rule).
+    rule: io_layer.SelectionRule (upstream volcano rule); None = p.adj < p_thr."""
     if isinstance(pairs, str) and pairs == "auto":
         pairs = comparable_pairs(stats)
-    matrix, meta, pi_df, rob_df = build_matrix(stats, p_thr)
+    matrix, meta, pi_df, rob_df = build_matrix(stats, p_thr, rule=rule)
     if matrix.empty:
         return {"matrix": matrix, "meta": meta, "table": meta,
                 "contrast_corr": pd.DataFrame(), "contrast_order": [],

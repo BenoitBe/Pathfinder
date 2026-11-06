@@ -16,8 +16,13 @@ import pandas as pd
 from scipy.cluster.hierarchy import linkage, fcluster, leaves_list
 from scipy.spatial.distance import squareform
 
+# GO / pathway terms are significant at q < 0.05: the threshold of the upstream
+# enrichment (gProfiler g:SCS/FDR, STRING FDR) is the one Pathfinder keeps. It does
+# not follow the protein rule (--pthr / --min-ratio): the terms are read, not retested.
+GO_Q_THR = 0.05
 
-def build_matrix(go_long: pd.DataFrame, p_thr: float = 0.05):
+
+def build_matrix(go_long: pd.DataFrame, p_thr: float = GO_Q_THR):
     """term x contrast matrix (signed z, masked by p_thr) + per-term metadata."""
     df = go_long.copy()
     df["sig"] = df["p_value"] < p_thr
@@ -207,7 +212,7 @@ def contrast_similarity(matrix: pd.DataFrame, min_shared: int = 3):
     return corr.loc[labels, labels], labels, shared.loc[labels, labels], rel
 
 
-def run(go_long: pd.DataFrame, p_thr: float = 0.05, jaccard_cut: float = 0.5, pairs=None):
+def run(go_long: pd.DataFrame, p_thr: float = GO_Q_THR, jaccard_cut: float = 0.5, pairs=None):
     matrix, meta, df = build_matrix(go_long, p_thr)
     meta = redundancy_clusters(go_long, matrix, meta, jaccard_cut)
     direction = directionality(matrix, meta, pairs)

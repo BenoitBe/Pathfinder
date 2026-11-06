@@ -383,14 +383,18 @@ def _matrix_caveat(stats):
 
 
 def _significance_rule(provenance):
-    """The rule behind 'significant', stated once: Pathfinder's count and the upstream
-    volcano/dashboard count use different rules and would otherwise look contradictory."""
+    """The rule behind 'significant', stated once. By default it is the upstream volcano
+    rule, so Pathfinder's proteins are the ones of the Deimos volcanos and dashboard;
+    when it was overridden the two counts differ and the summary says so."""
     if not provenance or not provenance.get("significance_rule"):
         return []
     line = f"Significance rule: {provenance['significance_rule']}."
-    if provenance.get("volcano_rule_upstream"):
-        line += (f" Upstream volcanos and dashboard use {provenance['volcano_rule_upstream']}, "
-                 "so they list more proteins: the two counts are not meant to agree.")
+    same = provenance.get("significance_rule_matches_upstream")
+    if same == "yes":
+        line += " Same proteins as the upstream volcanos and dashboard."
+    elif provenance.get("volcano_rule_upstream"):
+        line += (f" Upstream volcanos and dashboard use {provenance['volcano_rule_upstream']}: "
+                 "the two counts differ.")
     return [line]
 
 

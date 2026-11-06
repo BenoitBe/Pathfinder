@@ -380,6 +380,86 @@ def read_manifest(source):
     return out
 
 
+# --------------------------------------------------------------------------- #
+# Protein selection rule (the upstream volcano rule)                            #
+# --------------------------------------------------------------------------- #
+@dataclass(frozen=True)
+class SelectionRule:
+    """Which proteins count as differential in a contrast. Pathfinder applies the
+    rule declared by the upstream pipeline, so its proteins are exactly the ones
+    Deimos reports (volcanos, UpSet, dashboard): p_column < p_thr and
+    |log2FC| >= log2(ratio_min). Same comparisons as Deimos' volcano_status."""
+    p_column: str = "p.adj"          # suffix of the statistics column: 'p.adj' or 'p.val'
+    p_thr: float = 0.05
+    ratio_min: float = 1.0           # 1 = no fold-change criterion
+    source: str = "Pathfinder default (no upstream rule declared)"
+
+    @property
+    def lfc_min(self) -> float:
+        return float(np.log2(self.ratio_min)) if self.ratio_min > 1 else 0.0
+
+    def text(self) -> str:
+        p = "p.adj" if self.p_column == "p.adj" else "raw p-value"
+        out = f"{p} < {self.p_thr:g}"
+        if self.lfc_min > 0:
+            out += f" & |log2FC| >= {self.lfc_min:.3g} (ratio >= {self.ratio_min:g})"
+        else:
+            out += ", no fold-change criterion"
+        return out
+
+    def mask(self, p, d) -> np.ndarray:
+        p = pd.to_numeric(pd.Series(p), errors="coerce").to_numpy(float)
+        d = pd.to_numeric(pd.Series(d), errors="coerce").to_numpy(float)
+        with np.errstate(invalid="ignore"):
+            m = p < self.p_thr
+            if self.lfc_min > 0:
+                m &= np.abs(d) >= self.lfc_min
+        return m & np.isfinite(p) & np.isfinite(d)
+
+
+def _float(x):
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_volcano_rule(text):
+    """'p.adj < 0.05 & ratio >= 2.0' (Deimos manifest 1.0/1.1) -> (column, p, ratio)."""
+    t = str(text or "")
+    m_p = re.search(r"<\s*([0-9.eE+-]+)", t)
+    m_r = re.search(r"ratio\s*>=\s*([0-9.eE+-]+)", t)
+    if not m_p:
+        return None
+    col = "p.adj" if re.search(r"p\.?adj|fdr|q-?value", t, re.I) else "p.val"
+    return col, float(m_p.group(1)), float(m_r.group(1)) if m_r else 1.0
+
+
+def selection_rule(manifest=None, p_thr=None, min_ratio=None) -> SelectionRule:
+    """Protein selection rule. Order: structured keys of the upstream manifest
+    (Deimos >= schema 1.2), else its 'volcano_rule' text (1.0/1.1), else the
+    historical default (p.adj < 0.05, no fold-change criterion: Phobos, older
+    workbooks). Explicit --pthr / --min-ratio override the corresponding part."""
+    st = (manifest or {}).get("stats", {})
+    col, p, ratio, src = "p.adj", 0.05, 1.0, SelectionRule.source
+    if _float(st.get("volcano_p_thresh")) is not None:
+        col = "p.adj" if str(st.get("volcano_p_column", "p.adj")).strip() == "p.adj" else "p.val"
+        p = _float(st["volcano_p_thresh"])
+        ratio = _float(st.get("volcano_ratio_min")) or 1.0
+        src = "upstream manifest (volcano rule)"
+    elif st.get("volcano_rule") and _parse_volcano_rule(st["volcano_rule"]):
+        col, p, ratio = _parse_volcano_rule(st["volcano_rule"])
+        src = "upstream manifest (volcano rule)"
+    over = []
+    if p_thr is not None and float(p_thr) != p:
+        p, over = float(p_thr), over + [f"--pthr {float(p_thr):g}"]
+    if min_ratio is not None and float(min_ratio) != ratio:
+        ratio, over = float(min_ratio), over + [f"--min-ratio {float(min_ratio):g}"]
+    if over:
+        src = f"{src}, overridden by {' '.join(over)}"
+    return SelectionRule(col, p, ratio, src)
+
+
 def manifest_version_warning(manifest):
     """Explicit message when the manifest comes from an unknown major schema version,
     None otherwise (no manifest, or a supported version)."""

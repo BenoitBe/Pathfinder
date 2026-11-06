@@ -35,7 +35,7 @@ contrasts, plus an automatic interpretive summary.
   another that compares different conditions is reported as `mixed` — an ordering of
   the conditions, not a reversal. Ranked by recurrence then Pi-score (|LFC| ×
   −log10 p), with the upstream robustness score carried through as a confidence
-  column. The Pi-score orders proteins; inclusion rests on the adjusted p-value alone.
+  column. The Pi-score orders proteins; inclusion follows the upstream volcano rule.
 - **Co-expression modules (WGCNA)** — the modules computed upstream are *read*, not
   recomputed, and crossed with what Pathfinder knows: which module eigengene tracks
   the condition (Kruskal-Wallis + ε²), **which comparison it separates** (Mann-Whitney
@@ -151,10 +151,14 @@ python pathfinder.py --diagnose
 Pathfinder as its last step, in a separate process, with every file passed explicitly
 (no auto-detection) and the output in `<out_dir>/pathfinder/`.
 
-**What "significant" means here** — a protein counts when its adjusted p-value
-(`<contrast>_p.adj`) is below `--pthr` (0.05), with no fold-change criterion. Upstream
-volcanos usually combine a raw p-value and a ratio, so they list more proteins: both
-rules are written in the summary.
+**What "significant" means here** — the proteins are **the ones Deimos selected**: Pathfinder
+applies the volcano rule declared in the workbook's `_manifest` (statistic `p.adj` or raw `p.val`,
+threshold, fold-change ratio: `p < thr & |log2FC| >= log2(ratio)`, the comparisons of Deimos'
+`volcano_status`), so its counts match the Deimos volcanos, UpSet and dashboard. GO / pathway terms
+are read at **q < 0.05**, the threshold of the upstream gProfiler / STRING enrichment, whatever the
+protein rule. Without a manifest (Phobos, older Deimos workbooks) the historical rule applies:
+`p.adj < 0.05`, no fold-change criterion. `--pthr` / `--min-ratio` override the protein rule; the
+summary then says that the counts no longer match the upstream ones.
 
 ### Options
 
@@ -164,7 +168,8 @@ rules are written in the summary.
 | `--go`                    | GO enrichment workbook (may be the same file); `none` disables Meta-GO and GO auto-detection |
 | `--design`                | Sample → condition mapping (+ extra factors)                |
 | `--outdir`                | Output directory                                            |
-| `--pthr`                  | Adjusted-p threshold: protein signature and GO matrix mask (default 0.05) |
+| `--pthr`                  | Protein selection threshold (default: the upstream volcano rule, else p.adj < 0.05) |
+| `--min-ratio`             | Protein fold-change ratio, 1 = none (default: the upstream volcano rule) |
 | `--jaccard`               | Cut distance for GO redundancy grouping (default 0.5)       |
 | `--org`                   | Species: gProfiler code, scientific name, or NCBI taxid     |
 | `--no-online`             | Fully offline: no species prompt, no STRING query           |

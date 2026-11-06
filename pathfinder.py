@@ -12,7 +12,7 @@ Outputs: pathfinder_report.html + pathfinder_synthesis.xlsx + pathfinder_summary
 
 Usage:
   python pathfinder.py [--stats FILE] [--go FILE] [--design FILE] [--outdir DIR]
-                       [--pthr P] [--jaccard D] [--no-umap] [--diagnose]
+                       [--pthr P] [--min-ratio R] [--jaccard D] [--no-umap] [--diagnose]
                        [--org hsapiens | --no-online] [--refresh]
 """
 from __future__ import annotations
@@ -34,7 +34,7 @@ import species as species_mod
 import build_report_html as build_html
 import build_report_xlsx as build_xlsx
 
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 
 
 def main(argv=None):
@@ -46,9 +46,13 @@ def main(argv=None):
                     help="GO enrichment workbook (optional; may be the same file). "
                          "'none' disables the Meta-GO axis and any GO auto-detection.")
     ap.add_argument("--outdir", default=".")
-    ap.add_argument("--pthr", type=float, default=0.05,
-                    help="adjusted-p threshold: protein signature (p.adj, no fold-change "
-                         "criterion) and GO matrix mask")
+    ap.add_argument("--pthr", type=float, default=None,
+                    help="protein selection threshold. Default: the upstream volcano rule "
+                         "declared in the Deimos manifest (statistic, threshold and ratio), "
+                         "else p.adj < 0.05. GO terms always use q < 0.05.")
+    ap.add_argument("--min-ratio", type=float, default=None,
+                    help="fold-change ratio for protein selection (|log2FC| >= log2(R); "
+                         "1 = no fold-change criterion). Default: the upstream volcano rule.")
     ap.add_argument("--jaccard", type=float, default=0.5, help="cut distance for GO redundancy grouping")
     ap.add_argument("--no-umap", action="store_true")
     ap.add_argument("--design", default=None,
@@ -305,6 +309,13 @@ def main(argv=None):
                                 f"{len(stats.sample_int_cols)} samples"
                                 + (", z-scored subset" if stats.pca_is_zscored else ", raw log2") + ")")
 
+    # ---- Protein selection rule: the upstream (Deimos) volcano rule ----
+    rule = io_layer.selection_rule(manifest, p_thr=args.pthr, min_ratio=args.min_ratio)
+    print(f"[Pathfinder] protein selection: {rule.text()} [{rule.source}]")
+    if "overridden" in rule.source:
+        print("[Pathfinder] \u26a0 the protein selection differs from the upstream one: "
+              "Pathfinder counts will not match the Deimos volcanos.")
+
     # Contrasts whose directions can be compared (same comparison, different strata):
     # the only pairs where "up in one, down in the other" is a genuine reversal.
     pairs = axis_proteins.comparable_pairs(stats)
@@ -342,8 +353,8 @@ def main(argv=None):
             else:
                 provenance["go_file"] = os.path.basename(args.go)
                 provenance["go_rows"] = len(go.long)
-                go_res = axis_meta_go.run(go.long, p_thr=args.pthr, jaccard_cut=args.jaccard,
-                                          pairs=pairs)
+                go_res = axis_meta_go.run(go.long, p_thr=axis_meta_go.GO_Q_THR,
+                                          jaccard_cut=args.jaccard, pairs=pairs)
     if go_res is None:
         # empty matrix -> informative Meta-GO tab
         empty = pd.DataFrame(columns=["term_name", "term_id", "source", "n_sig",
@@ -373,7 +384,7 @@ def main(argv=None):
     explore = axis_explore.run(stats, do_umap=not args.no_umap, factors_df=factors_df)
 
     # ---- Protein axis (which proteins carry the signature) ----
-    prots = axis_proteins.run(stats, p_thr=args.pthr, pairs=pairs)
+    prots = axis_proteins.run(stats, p_thr=rule.p_thr, pairs=pairs, rule=rule)
     # ---- WGCNA axis (co-expression structure computed upstream) ----
     wgcna = None
     try:
@@ -396,12 +407,17 @@ def main(argv=None):
         provenance["wgcna_modules"] = f"{wgcna['n_modules']} modules (read, not recomputed)"
 
     provenance["proteins_significant"] = (
-        f"{prots['n_significant']} proteins significant in >=1 contrast (p.adj < {args.pthr})"
+        f"{prots['n_significant']} proteins significant in >=1 contrast ({rule.text()})"
         + (" - ranked by recurrence then Pi-score" if prots.get("has_pi") else ""))
     provenance["significance_rule"] = (
-        f"p.adj < {args.pthr}, no fold-change criterion"
+        f"{rule.text()} [{rule.source}]"
         + (f" ({provenance['p_adjust_upstream']}, as computed upstream)"
-           if provenance.get("p_adjust_upstream") else ""))
+           if provenance.get("p_adjust_upstream") and rule.p_column == "p.adj" else ""))
+    provenance["significance_rule_matches_upstream"] = (
+        "yes" if rule.source.startswith("upstream") and "overridden" not in rule.source
+        else "no")
+    provenance["go_rule"] = (f"GO / pathway terms: q < {axis_meta_go.GO_Q_THR:g} "
+                             "(as computed upstream by gProfiler / STRING)")
 
     # ---- Species (taxid) + Publications axis (online, opt-in) ----
     org_arg = args.org
@@ -454,7 +470,8 @@ def main(argv=None):
     run_online = bool(taxid) and not args.no_online
     if run_online:
         print(f"[Pathfinder] Publications axis: querying STRING PMID (taxid {taxid})...")
-        pubs = axis_publications.run(stats, taxid, p_thr=args.pthr, refresh=args.refresh)
+        pubs = axis_publications.run(stats, taxid, p_thr=rule.p_thr, refresh=args.refresh,
+                                     rule=rule)
         n = sum(len(v) for v in pubs["results"].values())
         if n == 0 and not pubs["results"]:
             print("[Pathfinder] ⚠ no publication returned (network issue or no significant proteins).")

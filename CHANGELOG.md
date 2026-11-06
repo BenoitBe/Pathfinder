@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.2.0 — 2026-11-06
+
+### Changed
+- **Proteins selected = the Deimos ones.** The protein signature, the core / specific /
+  reversed patterns, the WGCNA core set and the Publications axis now apply the volcano rule
+  declared in the Deimos `_manifest`: statistic (`p.adj` or raw `p.val`), threshold and ratio,
+  `p < thr & |log2FC| >= log2(ratio)` — the comparisons of Deimos' `volcano_status`. Counts
+  now match the Deimos volcanos, UpSet and dashboard (previously `p.adj < 0.05` without a
+  fold-change criterion, so the two counts differed). Structured manifest keys (Deimos schema
+  1.2: `volcano_p_column`, `volcano_p_thresh`, `volcano_ratio_min`) are read first, else the
+  `volcano_rule` text of schemas 1.0/1.1. Without a manifest (Phobos, older workbooks) the
+  historical rule is kept.
+- **GO / pathway terms at q < 0.05**, the threshold of the upstream gProfiler / STRING
+  enrichment, decoupled from the protein rule (`--pthr` used to drive both).
+- `--pthr` now defaults to the upstream rule; new `--min-ratio`. An explicit override is
+  printed, written in the provenance (`significance_rule_matches_upstream: no`) and in the
+  summary.
+
+### Added
+- `io_layer.SelectionRule` / `selection_rule()`; tests on the rule, on overrides, and a
+  protein-by-protein check against the Deimos contract workbook.
+
 ## v1.1.1 — 2026-10
 
 CI: the v1.1.0 `io_layer.py` / `species.py` (manifest reader, replicate index) were
