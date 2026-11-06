@@ -83,4 +83,28 @@ def test_end_to_end(tmp_path):
     contrast_cols = [c for c in syn["MetaGO_matrix"].columns if "_vs_" in str(c)]
     assert len(contrast_cols) == 6
     summary = (out / "pathfinder_summary.md").read_text(encoding="utf-8")
-    assert "Significance rule: p.adj < 0.05" in summary
+    # the fixture's Deimos run used 'p.value < 0.05 & ratio >= 1.5': Pathfinder follows it
+    assert "Significance rule: raw p-value < 0.05 & |log2FC| >= 0.585 (ratio >= 1.5)" in summary
+    assert "Same proteins as the upstream volcanos and dashboard." in summary
+    assert prov["significance_rule_matches_upstream"] == "yes"
+    assert prov["go_rule"].startswith("GO / pathway terms: q < 0.05")
+
+
+def test_selected_proteins_are_the_deimos_ones(stats, manifest):
+    """Protein by protein, Pathfinder selects what Deimos' volcano_status selects:
+    p < thr (statistic named by the manifest) and |log2FC| >= log2(ratio)."""
+    import numpy as np
+    import axis_proteins
+    rule = io_layer.selection_rule(manifest)
+    assert rule.source.startswith("upstream")
+    res = axis_proteins.run(stats, rule=rule)
+    de = pd.read_excel(WB, sheet_name="Differential_Expression")
+    col = "p.val" if "p.value" in manifest["stats"]["volcano_rule"] else "p.adj"
+    any_sig = np.zeros(len(de), bool)
+    for c in stats.contrasts:
+        p = de[f"{c}_{col}"].to_numpy(float)
+        d = de[f"{c}_diff"].to_numpy(float)
+        sig = (p < rule.p_thr) & (np.abs(d) >= np.log2(rule.ratio_min))
+        assert int(res["matrix"][c].notna().sum()) == int(sig.sum()), c
+        any_sig |= sig
+    assert res["n_significant"] == int(any_sig.sum())
