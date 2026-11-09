@@ -633,12 +633,28 @@ def _convergence(prots, wgcna):
     return out
 
 
-def generate(stats, meta_go, explore, provenance, prots=None, wgcna=None):
+def _reading_section(reading):
+    """Biological reading (ex-InSight): the response programmes, one line each."""
+    if not reading or reading.get("prog") is None:
+        return []
+    import html as _h
+    import re as _re
+    prog = reading["prog"]
+    out = [f"{prog.k} response programmes among the {len(prog.z)} selected proteins with "
+           f"abundances (k-means on condition profiles; design: {reading.get('design_text', '')})."]
+    sec = next((s for s in reading.get("sections", []) if s["id"] == "programmes"), None)
+    for b in (sec or {}).get("bullets", []):
+        out.append(_h.unescape(_re.sub(r"<[^>]+>", "", b)))
+    return out
+
+
+def generate(stats, meta_go, explore, provenance, prots=None, wgcna=None, reading=None):
     sections = [
         ("Experimental design (PCA)", _matrix_caveat(stats) + _design_section(explore)),
         ("Design factors (PC × factors)", _multifactor_section(explore)),
         ("Quality & homogeneity", _qc_section(explore, stats.cond_map)),
         ("Protein-level signature", _protein_section(prots, provenance)),
+        ("Response programmes (Biological reading)", _reading_section(reading)),
         ("Co-expression modules (WGCNA)", _wgcna_section(wgcna)),
         ("Functional synthesis (Meta-GO)", _go_section(meta_go)),
         ("Per-contrast detail", _contrast_section(meta_go)),

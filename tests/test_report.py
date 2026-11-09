@@ -191,7 +191,8 @@ class TestHtmlReport:
 class TestRepositoryInvariants:
     def test_syntax_is_compatible_with_python_39_to_312(self):
         """REGRESSION: an f-string backslash only parses from 3.12 on."""
-        for f in glob.glob(str(ROOT / "*.py")) + glob.glob(str(ROOT / "example_data/*.py")):
+        for f in (glob.glob(str(ROOT / "*.py")) + glob.glob(str(ROOT / "example_data/*.py"))
+                  + glob.glob(str(ROOT / "reading/*.py"))):
             src = Path(f).read_text(encoding="utf-8")
             for ver in (9, 10, 11, 12):
                 try:
@@ -202,7 +203,7 @@ class TestRepositoryInvariants:
     def test_no_french_strings_in_user_facing_code(self):
         accents = re.compile(r"[éèêàùçôîœ]")
         allowed = re.compile(r"Université|Proteogen|epsilon|ε|²")
-        for f in glob.glob(str(ROOT / "*.py")):
+        for f in glob.glob(str(ROOT / "*.py")) + glob.glob(str(ROOT / "reading/*.py")):
             for i, line in enumerate(Path(f).read_text(encoding="utf-8").splitlines(), 1):
                 if accents.search(line) and not allowed.search(line):
                     pytest.fail(f"{os.path.basename(f)}:{i} still in French: {line.strip()[:70]}")

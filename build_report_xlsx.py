@@ -4,7 +4,8 @@ import numpy as np
 import pandas as pd
 
 
-def build(path, meta_go, explore, provenance: dict, resume=None, pubs=None, prots=None, wgcna=None):
+def build(path, meta_go, explore, provenance: dict, resume=None, pubs=None, prots=None, wgcna=None,
+          reading=None):
     with pd.ExcelWriter(path, engine="openpyxl") as xw:
         # provenance first
         pd.DataFrame(list(provenance.items()), columns=["key", "value"]).to_excel(
@@ -22,6 +23,11 @@ def build(path, meta_go, explore, provenance: dict, resume=None, pubs=None, prot
         # interpretive summary
         if resume is not None and not resume["lines"].empty:
             resume["lines"].to_excel(xw, sheet_name="Summary", index=False)
+
+        # --- Biological reading (programmes, functional groups, facts) ---
+        for name, df in ((reading or {}).get("tables") or {}).items():
+            if df is not None and len(df):
+                df.to_excel(xw, sheet_name=name[:31], index=False)
 
         # --- Meta-GO ---
         mat = meta_go["matrix"].copy()

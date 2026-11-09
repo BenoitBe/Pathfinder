@@ -67,8 +67,30 @@ contrasts, plus an automatic interpretive summary.
   gene); the criterion, gene-list cap and PMID truncation are reported. The species is
   detected in the workbook and confirmed interactively at launch (`--org` to skip
   the prompt, `--no-online` to stay fully offline).
+- **Biological reading** (ex-InSight, merged in 1.3.0) — what the biology does, as
+  interactive SVG figures with numeric facts generated from the results:
+  how much changes per comparison; where the conditions sit (PCA centroids, with
+  trajectories when the design has an ordered level — time, stage, dose — read from the
+  condition names only on evidence); **response programmes** (k-means on the condition
+  profiles of the selected proteins) with their **stability under replicate resampling**
+  (clusterboot-like Jaccard, ≥ 0.75 stable, < 0.6 dissolves); **functional groups** = the
+  Meta-GO redundancy groups, or the **GSEA leading edges when the ORA is empty**
+  (non-model species); annotated volcanos coloured by functional group; spotlight proteins
+  replicate by replicate (hollow = not detected, DPC estimate). **Factorial designs**
+  (genotype × light × time, e.g. 9 genotypes × T0 / T3 / T7 × light / dark = 45 groups):
+  factors read from `--factor-regex`, `matrices/samples.tsv` columns, the design file, or
+  the condition names (time-like tokens anywhere; shorter names such as `Tron_T0` next to
+  `Tron_T3_Light` aligned, the missing factor reading `—`); comparisons arranged by the
+  factor they vary (*light varied — 18 comparisons*, rows = genotype, columns = time);
+  condition map coded by factor (colour, shape, size); programme heatmap ordered genotype >
+  light > time; **interaction plots of each programme** (x = time, one line per genotype,
+  one panel per light, the reference genotype in white, T0 as the shared start); and the
+  **share of each protein's variance carried by each factor and two-factor interaction**
+  (type-II sums of squares). Hover a mark for its values; click a legend entry to hide a
+  series.
 - **Automatic interpretive summary** — design capture, batch suspicion, outlier
-  samples, functional synthesis per source. Deterministic and reproducible.
+  samples, functional synthesis per source, response programmes. Deterministic and
+  reproducible.
 
 ---
 
@@ -177,6 +199,16 @@ summary then says that the counts no longer match the upstream ones.
 | `--no-umap`               | Disable UMAP views                                          |
 | `--diagnose`              | Report detected sheets/columns and group sizes              |
 | `--write-design-template` | Write a pre-filled design template                          |
+| `--no-reading`            | Skip the Biological reading tab                             |
+| `--k`                     | Number of response programmes (default: silhouette, 3-8)    |
+| `--volcano C`             | Contrast drawn as an annotated volcano (repeatable; default: the most differential) |
+| `--max-volcanos`          | Number of annotated volcanos (default 4)                    |
+| `--categorical`           | Never read an order in the condition names                  |
+| `--order-regex`           | Regex reading the ordered level, e.g. `T(\d+)`              |
+| `--reference-fasta`       | Reference proteome of the orthologues (readable names)      |
+| `--groups-from`           | Functional groups: `auto` (ORA, else GSEA), `ora`, `gsea`   |
+| `--factor-regex`          | Named groups reading the design factors in the condition names, e.g. `(?P<genotype>[^_]+)_T(?P<time>\d+)(?:_(?P<light>Light\|Dark))?` |
+| `--prog-boot`             | Replicate resamplings for the programme stability (default 50, 0 = off) |
 | `--version`               | Print the Pathfinder version                                |
 
 ---
@@ -188,16 +220,16 @@ pip install pytest
 pytest
 ```
 
-176 tests covering the loader (GO sheet mapping, per-sample matrix selection, design
-resolution, upstream manifest), the axes, the interpretive summary and the HTML report,
-plus repository invariants (Python 3.9-3.12 syntax, no untranslated strings). A
+247 tests covering the loader (GO sheet mapping, per-sample matrix selection, design
+resolution, upstream manifest), the axes, the biological reading, the interpretive summary and the HTML report,
+plus repository invariants (Python 3.9-3.13 syntax, no untranslated strings). A
 **contract test** runs on a real Deimos workbook reduced to its data sheets
 (`tests/fixtures/deimos_contract.xlsx`, regenerated with
 `tests/fixtures/make_deimos_fixture.py` whenever Deimos bumps its manifest schema). Most of them
 encode a regression that actually happened on production data — nested condition names
 silently merging contrasts, a PCA running on a pre-selected subset, correlation
 reported as biology when it was mechanical, figures collapsing to 300 px. CI runs the
-suite on Python 3.9 to 3.12 plus a smoke test on the synthetic dataset.
+suite on Python 3.9 to 3.13 plus a smoke test on the synthetic dataset.
 
 ## Repository structure
 
@@ -215,6 +247,9 @@ pathfinder/
 ├── cache.py                   # Disk cache for online calls
 ├── build_report_html.py       # Self-contained HTML report generator
 ├── build_report_xlsx.py       # Synthesis workbook generator
+├── reading/                   # Biological reading (ex-InSight): io, factors (design),
+│                              #   labels, programmes (+ stability), groups (Meta-GO / GSEA),
+│                              #   gsea, factorial (variance partition), svg, tables, run
 ├── generate_icon.py           # Icon generator
 ├── pathfinder_icon.svg        # Pathfinder icon (README banner)
 ├── pathfinder_mark.svg        # Pathfinder mark (report navigation)
@@ -230,6 +265,9 @@ pathfinder/
     ├── test_axes.py
     ├── test_summary.py
     ├── test_report.py
+    ├── test_reading.py        # biological reading end to end, GSEA, stability, factorial
+    ├── test_reading_factors.py
+    ├── reading_fixture.py     # fake Deimos output folder for any design
     └── fixtures/              # real Deimos workbook (data sheets only) + design
 ```
 
@@ -241,10 +279,11 @@ pathfinder/
 pathfinder_output/
 ├── pathfinder_report.html      # Self-contained interactive report
 ├── pathfinder_synthesis.xlsx   # Multi-sheet synthesis workbook
-└── pathfinder_summary.md       # Interpretive summary (standalone)
+├── pathfinder_summary.md       # Interpretive summary (standalone)
+└── pathfinder_programmes.tsv   # Response programmes (one row per protein, for R)
 ```
 
-**HTML tabs**: Summary · Overview · Proteins · WGCNA · Meta-GO · Exploration · Protein UMAP · Publications
+**HTML tabs**: Summary · Biological reading · Overview · Proteins · WGCNA · Meta-GO · Exploration · Protein UMAP · Publications
 
 The Summary opens with colour-coded verdict cards (design, quality, core proteins,
 core module, top function) and a chain showing where the signature lives: *core
@@ -257,7 +296,8 @@ Illustrator/Inkscape, 2× PNG for slides. Filenames are derived from the figure 
 **Excel sheets**: provenance · Summary · Proteins_core · Proteins_matrix ·
 WGCNA_module_condition · WGCNA_core_enrichment · WGCNA_hubs · MetaGO_matrix · MetaGO_directionality ·
 Contrast_similarity · PCA_scores · PCA_loadings · PC_factor_assoc · PC_factor_multi ·
-Sample_correlation · PCA_scree · Publications
+Sample_correlation · PCA_scree · Publications · Reading_facts · Programmes · Programme_summary ·
+Variance_partition · Design_factors · Groups · Group_terms · Group_x_contrast · Reading_columns
 
 ---
 

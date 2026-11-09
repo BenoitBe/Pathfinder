@@ -5,6 +5,8 @@ Pathfinder - exploration & synthesis layer on top of Deimos/Phobos outputs.
 Reads the upstream Excel report (no statistics are recomputed) and produces:
   - Meta-GO      : term x contrast matrix, cross-directionality, redundancy grouping
   - Exploration  : PCA, PC <-> factor association (multi-factor), correlation, UMAP
+  - Biological reading (ex-InSight): response programmes, functional groups, annotated
+                   volcanos, condition map, spotlight proteins - interactive SVG
   - Publications : STRING PMID enrichment per contrast (online, opt-in)
   - Summary      : deterministic interpretive summary
 
@@ -14,6 +16,8 @@ Usage:
   python pathfinder.py [--stats FILE] [--go FILE] [--design FILE] [--outdir DIR]
                        [--pthr P] [--min-ratio R] [--jaccard D] [--no-umap] [--diagnose]
                        [--org hsapiens | --no-online] [--refresh]
+                       [--k K] [--volcano C ...] [--max-volcanos N] [--categorical]
+                       [--order-regex RE] [--reference-fasta FASTA] [--no-reading]
 """
 from __future__ import annotations
 import argparse
@@ -34,7 +38,7 @@ import species as species_mod
 import build_report_html as build_html
 import build_report_xlsx as build_xlsx
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 
 def main(argv=None):
@@ -67,6 +71,32 @@ def main(argv=None):
                     help="write a pre-filled ExperimentalDesign_template.csv, then exit")
     ap.add_argument("--diagnose", action="store_true",
                     help="report detected sheets/columns and group sizes, then exit")
+    rd = ap.add_argument_group("biological reading (ex-InSight)")
+    rd.add_argument("--no-reading", action="store_true",
+                    help="skip the Biological reading tab (programmes, annotated volcanos...)")
+    rd.add_argument("--k", type=int, default=None,
+                    help="number of response programmes (default: silhouette, 3-8)")
+    rd.add_argument("--volcano", action="append", dest="volcanos", default=None,
+                    help="contrast to draw as an annotated volcano (repeatable; default: the "
+                         "comparisons with most differential proteins)")
+    rd.add_argument("--max-volcanos", type=int, default=4)
+    rd.add_argument("--categorical", action="store_true",
+                    help="never read an order in condition names (no trajectories)")
+    rd.add_argument("--order-regex", default=None,
+                    help=r"regex reading the ordered level in condition names, e.g. 'T(\d+)'")
+    rd.add_argument("--reference-fasta", default=None,
+                    help="reference proteome of the orthologues (readable protein names)")
+    rd.add_argument("--factor-regex", default=None,
+                    help="named groups reading the design factors in the condition names, e.g. "
+                         "'(?P<genotype>[^_]+)_T(?P<time>\\d+)(?:_(?P<light>Light|Dark))?' "
+                         "(default: samples.tsv / design columns, else the names)")
+    rd.add_argument("--groups-from", choices=("auto", "ora", "gsea"), default="auto",
+                    help="functional groups of the reading: the Meta-GO groups of the ORA "
+                         "(default), else the GSEA leading edges when the ORA is empty (auto); "
+                         "'gsea' forces the GSEA sheets")
+    rd.add_argument("--prog-boot", type=int, default=50,
+                    help="replicate resamplings for the stability of the response programmes "
+                         "(0 = off)")
     args = ap.parse_args(argv)
 
     # --go none: no Meta-GO, and above all no hunting for a GO workbook around
@@ -326,7 +356,7 @@ def main(argv=None):
             f"({len(pairs)} comparable pair(s)); up in one contrast and down in another "
             "that compares different conditions is reported as 'mixed'")
 
-    go_res = None
+    go_res, go_long = None, None
     if args.go and os.path.exists(args.go):
         try:
             go = io_layer.load_go(args.go, stats.contrasts, conditions=stats.conditions)
@@ -353,6 +383,7 @@ def main(argv=None):
             else:
                 provenance["go_file"] = os.path.basename(args.go)
                 provenance["go_rows"] = len(go.long)
+                go_long = go.long
                 go_res = axis_meta_go.run(go.long, p_thr=axis_meta_go.GO_Q_THR,
                                           jaccard_cut=args.jaccard, pairs=pairs)
     if go_res is None:
@@ -418,6 +449,35 @@ def main(argv=None):
         else "no")
     provenance["go_rule"] = (f"GO / pathway terms: q < {axis_meta_go.GO_Q_THR:g} "
                              "(as computed upstream by gProfiler / STRING)")
+
+    # ---- Biological reading (ex-InSight): programmes, functional groups, figures ----
+    reading = None
+    if not args.no_reading:
+        try:
+            from reading.run import run_reading
+            ov = {}
+            if args.order_regex:
+                ov["order_regex"] = args.order_regex
+            if args.categorical:
+                ov["categorical"] = True
+            reading = run_reading(stats, args.stats, rule, manifest, go_res, go_long,
+                                  k=args.k, volcanos=args.volcanos,
+                                  max_volcanos=args.max_volcanos,
+                                  design_overrides=ov or None,
+                                  reference_fasta=args.reference_fasta,
+                                  go_q_thr=axis_meta_go.GO_Q_THR, jaccard=args.jaccard,
+                                  groups_from=args.groups_from, n_boot=args.prog_boot,
+                                  factors_df=factors_df, factor_regex=args.factor_regex)
+        except Exception as e:                                        # noqa: BLE001
+            print(f"[Pathfinder] \u26a0 Biological reading skipped ({type(e).__name__}: {e})")
+            if os.environ.get("PATHFINDER_DEBUG"):
+                import traceback
+                traceback.print_exc()
+        if reading is not None:
+            provenance.update(reading["meta"])
+            n_fig = sum(len(s["svgs"]) for s in reading["sections"])
+            print(f"[Pathfinder] Biological reading: {len(reading['sections'])} sections, "
+                  f"{n_fig} figures")
 
     # ---- Species (taxid) + Publications axis (online, opt-in) ----
     org_arg = args.org
@@ -491,9 +551,11 @@ def main(argv=None):
         "Significant proteins": prots["n_significant"],
         "PC1 variance": f"{explore['pca']['var_exp'][0]:.0f}%",
     }
+    if reading is not None and reading.get("prog") is not None:
+        kpis["Response programmes"] = reading["prog"].k
 
     # ---- Interpretive summary ----
-    resume = summary_mod.generate(stats, go_res, explore, provenance, prots, wgcna)
+    resume = summary_mod.generate(stats, go_res, explore, provenance, prots, wgcna, reading)
     md_path = os.path.join(args.outdir, "pathfinder_summary.md")
     try:
         with open(md_path, "w", encoding="utf-8") as f:
@@ -517,8 +579,15 @@ def main(argv=None):
             writer_fn(alt)
             return alt
 
-    xlsx_path = _safe_write(lambda p: build_xlsx.build(p, go_res, explore, provenance, resume, pubs, prots, wgcna),
+    xlsx_path = _safe_write(lambda p: build_xlsx.build(p, go_res, explore, provenance, resume, pubs, prots, wgcna,
+                                                       reading),
                             os.path.join(args.outdir, "pathfinder_synthesis.xlsx"), "xlsx")
+    tsv_path = None
+    ptab = ((reading or {}).get("tables") or {}).get("Programmes")
+    if ptab is not None and len(ptab):
+        from reading.tables import TSV_NAME
+        tsv_path = _safe_write(lambda p: ptab.to_csv(p, sep="\t", index=False),
+                               os.path.join(args.outdir, TSV_NAME), "tsv")
     # branding: inline SVG mark (PNG base64 fallback)
     import base64
     _here = os.path.dirname(os.path.abspath(__file__))
@@ -535,11 +604,13 @@ def main(argv=None):
                 break
     branding = {"icon_b64": icon_b64, "icon_svg": icon_svg}
 
-    html_path = _safe_write(lambda p: build_html.build(p, go_res, explore, provenance, kpis, resume, branding, pubs, prots, wgcna),
+    html_path = _safe_write(lambda p: build_html.build(p, go_res, explore, provenance, kpis, resume, branding, pubs, prots, wgcna,
+                                                       reading),
                             os.path.join(args.outdir, "pathfinder_report.html"), "html")
 
     print("\n" + resume["markdown"] + "\n")
-    print(f"[Pathfinder] OK\n  - {xlsx_path}\n  - {html_path}\n  - {md_path}")
+    print(f"[Pathfinder] OK\n  - {xlsx_path}\n  - {html_path}\n  - {md_path}"
+          + (f"\n  - {tsv_path}" if tsv_path else ""))
     return xlsx_path, html_path
 
 
