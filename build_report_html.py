@@ -566,6 +566,8 @@ EXPORT_JS = """
   }
   function figName(el){
     var node = el, base = null;
+    var lab = el.querySelector ? el.querySelector('svg.rd[aria-label]') : null;
+    if(lab) return slug(lab.getAttribute('aria-label'));
     for(var up = 0; up < 5 && node; up++){
       var n = node.previousElementSibling, guard = 0;
       while(n && guard++ < 10){
@@ -677,7 +679,54 @@ EXPORT_JS = """
 """
 
 
-def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, branding=None, pubs=None, prots=None, wgcna=None):
+READING_JS = """
+(function(){
+  // clickable legends of the reading figures: hide / show the data-g series
+  document.addEventListener('click', function(e){
+    var it = e.target.closest ? e.target.closest('svg.rd .lg[data-t]') : null;
+    if(!it) return;
+    var svg = it.closest('svg'), k = it.getAttribute('data-t');
+    var off = !it.classList.contains('off');
+    it.classList.toggle('off', off);
+    svg.querySelectorAll("[data-g='" + k + "']").forEach(function(g){
+      g.style.display = off ? 'none' : ''; });
+  });
+})();
+"""
+
+
+def _reading_html(reading):
+    """"Biological reading" tab (ex-InSight): numeric facts + SVG figures."""
+    if not reading or not reading.get("sections"):
+        return ("<p class='mut'>Biological reading unavailable: it needs the differential "
+                "results and, for the programmes and the spotlight, per-sample abundances "
+                "(Deimos <code>matrices/</code> folder or a <code>Log2_Impute</code> sheet).</p>")
+    out = []
+    k = "".join(f"<div class='kpi'><div class='kv'>{_esc(v)}</div><div class='kl'>{_esc(n)}</div></div>"
+                for n, v in reading.get("kpis", []))
+    out.append(f"<div class='cards'>{k}</div>")
+    m = reading.get("meta", {})
+    lines = [f"Design: {m.get('reading_design', '')}",
+             f"Proteins: {reading.get('rule_text', '')} — the selection of the Proteins tab",
+             f"Abundances: {m.get('reading_abundance', 'n/a')} · protein names: "
+             f"{m.get('reading_protein_names', '')}"]
+    out.append("<p class='mut'>" + "<br>".join(_esc(l) for l in lines) + "</p>")
+    chips = "".join(f"<a href='#rd-{_esc(s['id'])}'>{_esc(s['title'])}</a>"
+                    for s in reading["sections"])
+    out.append(f"<div class='rdnav'>{chips}</div>")
+    for s in reading["sections"]:
+        bl = "".join(f"<li>{b}</li>" for b in s.get("bullets", []))      # HTML already escaped
+        figs = "".join(f"<div class='rdfig'>{svg}</div>" for svg in s.get("svgs", []))
+        out.append(f"<h3 id='rd-{_esc(s['id'])}'>{_esc(s['title'])}</h3>"
+                   f"<ul class='resume'>{bl}</ul>{figs}")
+    out.append("<p class='mut'>Facts are computed from the results; interpretation is yours. "
+               "Hover a mark for its values; click a legend entry of a volcano to hide or show "
+               "that series. Tables: sheets <code>Programmes</code>, <code>Groups</code>, "
+               "<code>Reading_facts</code> of <code>pathfinder_synthesis.xlsx</code>.</p>")
+    return "".join(out)
+
+
+def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, branding=None, pubs=None, prots=None, wgcna=None, reading=None):
     b = {"title": "Pathfinder",
          "subtitle": "Pathway And Term Harmonisation For INtegrated Design Exploration & Reporting",
          "affiliation": "Proteogen · Université de Caen",
@@ -933,6 +982,9 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
 
     panels = {"Summary": _resume_html(resume), "Overview": overview, "Proteins": proteins_html,
               "Meta-GO": metago, "Exploration": explore_html, "Protein UMAP": umap_p_html}
+    if reading is not None:
+        panels["Biological reading"] = _reading_html(reading)
+        tabs = tabs[:1] + ["Biological reading"] + tabs[1:]
 
     # WGCNA - co-expression structure read from upstream
     if wgcna and wgcna.get("n_modules"):
@@ -971,7 +1023,8 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
         if h is not None and not h.empty:
             parts.append("<h3>Module hubs</h3>" + _table(h, max_rows=30))
         panels["WGCNA"] = "".join(parts)
-        tabs = tabs[:3] + ["WGCNA"] + tabs[3:]
+        i_ = tabs.index("Proteins") + 1
+        tabs = tabs[:i_] + ["WGCNA"] + tabs[i_:]
 
     # Publications (online axis) - tab added only when present
     if pubs is not None and any(pubs.get("results", {}).values()):
@@ -1054,6 +1107,12 @@ code{{background:{PANEL};padding:1px 5px;border-radius:4px;color:{PURP}}}
 .figbtn{{background:{PANEL};color:{FG};border:1px solid {GRID};border-radius:4px;
  padding:2px 7px;font-size:10px;cursor:pointer;line-height:1.5}}
 .figbtn:hover{{background:{BLUE};border-color:{BLUE};color:#fff}}
+.rdnav{{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 6px}}
+.rdnav a{{color:{BLUE};text-decoration:none;font-size:12px;border:1px solid {GRID};border-radius:14px;padding:3px 11px}}
+.rdnav a:hover{{border-color:{BLUE}}}
+.rdfig{{margin:6px 0 18px}}
+svg.rd .pt:hover{{stroke:#fff;stroke-width:1.6}}
+svg.rd .lg.off{{opacity:.35}}
 </style></head><body>
 <header>{(f"<span class='logo'>{b['icon_svg']}</span>" if b.get('icon_svg') else (f"<img class='logo' src='data:image/png;base64,{b['icon_b64']}' alt=''/>" if b['icon_b64'] else ""))}<div class='brand'><span class='t'>{_esc(b['title'])}</span><span class='s'>{_esc(b['subtitle'])}</span><span class='a'>{_esc(b['affiliation'])}</span></div></header>
 <nav>{nav}</nav>
@@ -1065,6 +1124,7 @@ function show(i){{document.querySelectorAll('.panel').forEach(p=>p.style.display
  event.target.classList.add('active');}}
 </script>
 <script>{EXPORT_JS}</script>
+<script>{READING_JS}</script>
 </body></html>"""
     with open(path, "w", encoding="utf-8") as f:
         f.write(doc)

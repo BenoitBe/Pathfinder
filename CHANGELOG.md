@@ -1,5 +1,59 @@
 # Changelog
 
+## v1.3.0 — 2026-11-07
+
+### Added
+- **Biological reading tab** — InSight merged into Pathfinder: one report. Read from what
+  Pathfinder already loads (same selection rule as the Proteins tab, same Meta-GO groups)
+  plus Deimos' `matrices/` folder (DPC or imputed abundances, observed flags, samples.tsv),
+  `PCA_Scores` and `last_config.yaml`. Interactive SVG in the report style (hover = name,
+  log2FC, p, programme, group; clickable volcano legends; SVG / PNG export):
+  how much changes; condition map (trajectories for ordered designs); response programmes;
+  functional groups (enrichment map + group × contrast matrix, 16 most significant groups);
+  annotated volcanos; spotlight proteins. Every figure is guarded: one failing figure never
+  stops the others or the report.
+- **Functional groups = the Meta-GO redundancy groups** (average-linkage Jaccard, `--jaccard`
+  cut), named by the Meta-GO representative term: the same group carries the same name in
+  every tab. InSight's own themes (Jaccard ≥ 0.35 + modularity) are gone.
+- **GSEA when the ORA is empty** (H. glaber case): the `GSEA_*` sheets of Deimos (manifest
+  section `gsea_sheet`, schema 1.3; leading edge read from `Lead_proteins`, else matched
+  through the Genes column) become the functional groups — pathways grouped by Jaccard on
+  their leading-edge proteins, NES as direction. `--groups-from auto|ora|gsea`.
+- **Stability of the response programmes**: replicates resampled within each condition,
+  k-means re-run, clusters matched to the programmes (Hungarian on Jaccard); mean Jaccard
+  per programme (Hennig's clusterboot thresholds: ≥ 0.75 stable, < 0.6 dissolved) and, per
+  protein, the fraction of resamplings where it stays. `--prog-boot` (50; 0 = off).
+- **Factorial designs** (Hordeum: 9 genotypes × T0 / T3 / T7 × light / dark = 45 groups).
+  - Factors from `--factor-regex` (named groups; absent group = `—`), else `samples.tsv`
+    columns, else the design file, else the condition names: time-like tokens form `time`
+    wherever they sit, shorter names (`Tron_T0` beside `Tron_T3_Light`) are aligned on the
+    vocabulary of each position, an unknown token stops the guess; aliased factors dropped.
+    A bad regex is reported and the automatic reading takes over. If the separators give
+    fewer than two factors, letters glued to a number are split (`Grp_Male4` -> sex x age,
+    `embAviso24` -> cultivar x time); bare numbers are never called `time`. Contrasts match
+    their conditions whatever the separator (`Grp_Male4` in the contrast, `Grp-Male4` in
+    samples.tsv). Checked on a real H. glaber run (2 x 2, 6 contrasts).
+  - Roles: x = the ordered factor (time), lines = the factor with most levels (genotype),
+    panels = the rest (light); a level of x seen in one panel only (T0) is the shared start.
+  - *Effects of each design factor*: comparisons grouped by the factor they vary, rows and
+    columns = the context levels, cells = down | up counts on a shared scale.
+  - Condition map coded by factor (colour = genotype, shape = light, size = time); programme
+    heatmap ordered genotype > light > time; *Programmes by design factor* = interaction
+    plots per programme (reference genotype in white, clickable legend).
+  - *What drives the response*: share of each protein's variance carried by each factor and
+    two-factor interaction (type-II sums of squares, sum-to-zero coding), higher-order
+    condition effects and replicates; median per programme. Sheets `Variance_partition`,
+    `Design_factors`, `var_*` columns; provenance `reading_factors`, `reading_factor_roles`.
+- Synthesis workbook sheets `Reading_facts`, `Programmes` (with `stability` and `var_*`),
+  `Programme_summary`, `Variance_partition`, `Design_factors`, `Groups`, `Group_terms`,
+  `Group_x_contrast`, `Reading_columns`; `pathfinder_programmes.tsv`; summary section
+  *Response programmes*; provenance keys `reading_*`.
+- CLI: `--no-reading`, `--k`, `--volcano`, `--max-volcanos`, `--categorical`,
+  `--order-regex`, `--reference-fasta`, `--groups-from`, `--prog-boot`, `--factor-regex`.
+- No new dependency (no matplotlib, networkx or adjustText: layouts and label placement
+  are done in numpy). Repository invariants (Python 3.9 syntax, English strings) extended
+  to `reading/`.
+
 ## v1.2.0 — 2026-11-06
 
 ### Changed
