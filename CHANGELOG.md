@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Day / night button** in the report header (2026-11-09). Night stays the default; the day
+  theme puts the page and every figure on white. Page colours are CSS variables; figure
+  neutrals (background, panels, grid, text, white lines) are swapped by the browser from one
+  map (`LIGHT_SWAP`), light hues are darkened on text only (`LIGHT_TEXT`), marks keep their
+  colours. SVG / PNG exports follow the theme on screen (same maps written into the copy).
+  The choice is stored in `localStorage` (ignored when the browser blocks it).
+- Test: every grey used by a figure must have a day equivalent.
+
+### Changed
+- Factor profiles: the reference level is called the *neutral line* (white at night, black
+  by day) instead of "in white".
+
 ## v1.3.0 — 2026-11-07
 
 ### Added

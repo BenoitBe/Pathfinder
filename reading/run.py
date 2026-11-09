@@ -244,7 +244,7 @@ def run_reading(stats, stats_path, rule, manifest=None, go_res=None, go_long=Non
             b = [f"x = {html.escape(ro['x'])}, one line per {html.escape(ro['lines'])}"
                  + (f", one panel per {html.escape(ro['facets'][0])}" if ro["facets"] else "")
                  + (f"; {html.escape(f['ref'])} (the reference of the {html.escape(ro['lines'])} "
-                    "comparisons) in white" if f["ref"] else "")
+                    "comparisons) as the neutral line (white at night, black by day)" if f["ref"] else "")
                  + (f"; {', '.join(html.escape(v) for v in f['shared'])} = shared start of every "
                     "panel" if f["shared"] else "") + "."]
             for p, (cmax, vmax_, cmin, vmin_) in f["extremes"].items():

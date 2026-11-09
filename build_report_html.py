@@ -6,6 +6,7 @@ no charting JS). Palette consistent with the pipeline dashboard.
 """
 from __future__ import annotations
 import html
+import json
 import numpy as np
 import pandas as pd
 
@@ -13,6 +14,74 @@ BG = "#0d1117"; PANEL = "#161b22"; GRID = "#30363d"; FG = "#c9d1d9"; MUT = "#8b9
 BLUE = "#388bfd"; UP = "#f85149"; DOWN = "#388bfd"; GREEN = "#3fb950"; PURP = "#bc8cff"; AMBER = "#d29922"
 COND_PALETTE = ["#388bfd", "#3fb950", "#bc8cff", "#d29922", "#f85149", "#39c5cf", "#db61a2", "#a5d6ff",
                 "#7ee787", "#ffa657", "#d2a8ff", "#f2cc60", "#79c0ff", "#ff7b72", "#56d364", "#e3b341"]
+# Day / night theme (button in the report header). The night palette above stays the
+# source of every figure; the day theme is applied by the browser:
+#   - THEME_VARS: page colours as CSS variables (night = the constants above);
+#   - LIGHT_SWAP: neutral colours swapped on every figure element (fill and stroke);
+#   - LIGHT_TEXT: light hues darkened on text only (contrast on white); marks keep them.
+# The same maps recolour an exported SVG / PNG when the day theme is on.
+THEME_VARS = {
+    "dark": {"bg": BG, "panel": PANEL, "grid": GRID, "fg": FG, "mut": MUT, "hi": "#ffffff",
+             "stripe": "#11161d", "blue": BLUE, "amber": AMBER, "green": GREEN, "purp": PURP},
+    "light": {"bg": "#ffffff", "panel": "#f6f8fa", "grid": "#d0d7de", "fg": "#1f2328", "mut": "#59636e",
+              "hi": "#1f2328", "stripe": "#f6f8fa", "blue": "#0969da", "amber": "#9a6700",
+              "green": "#1a7f37", "purp": "#8250df"},
+}
+LIGHT_SWAP = {
+    "#0d1117": "#ffffff",   # BG
+    "#161b22": "#f6f8fa",   # PANEL
+    "#1c2128": "#eaeef2",   # not significant / missing cells
+    "#30363d": "#d0d7de",   # GRID
+    "#3d444d": "#c8d1da",   # faint guides
+    "#c9d1d9": "#1f2328",   # FG
+    "#8b949e": "#59636e",   # MUT
+    "#6e7681": "#6e7781",
+    "#e6edf3": "#8c959f",   # diagonal of the correlation heatmaps
+    "#ffffff": "#1f2328",   # white text and lines (titles, means, reference level)
+    "#fff": "#1f2328",
+}
+LIGHT_TEXT = {
+    "#388bfd": "#0969da", "#f85149": "#cf222e", "#3fb950": "#1a7f37", "#bc8cff": "#8250df",
+    "#d29922": "#9a6700", "#39c5cf": "#1b7c83", "#db61a2": "#bf3989", "#a5d6ff": "#0550ae",
+    "#7ee787": "#1a7f37", "#ffa657": "#bc4c00", "#d2a8ff": "#8250df", "#f2cc60": "#9a6700",
+    "#79c0ff": "#0969da", "#ff7b72": "#cf222e", "#56d364": "#1a7f37", "#e3b341": "#9a6700",
+}
+
+
+def theme_css() -> str:
+    """CSS of the day / night theme: variables and figure recolouring."""
+    def _vars(d):
+        return ";".join(f"--{k}:{v}" for k, v in d.items())
+    out = [f":root,html[data-theme=dark]{{{_vars(THEME_VARS['dark'])}}}",
+           f"html[data-theme=light]{{{_vars(THEME_VARS['light'])}}}"]
+    L = "html[data-theme=light] main svg"
+    for a, b in LIGHT_SWAP.items():
+        out.append(f"{L} [fill='{a}' i]{{fill:{b}}} {L} [stroke='{a}' i]{{stroke:{b}}}")
+    for a, b in LIGHT_TEXT.items():
+        out.append(f"{L} text[fill='{a}' i],{L} tspan[fill='{a}' i]{{fill:{b}}}")
+    out.append("html[data-theme=light] #go_cv{background:var(--panel)!important}")
+    return "\n".join(out)
+
+
+THEME_HEAD_JS = """(function(){try{var t=localStorage.getItem('pathfinder-theme');
+if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();"""
+
+THEME_JS = """
+(function(){
+  function cur(){ return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'; }
+  function label(){ var b = document.getElementById('themeBtn'); if(!b) return;
+    var day = cur() === 'light';
+    b.textContent = day ? '\\u263E Night' : '\\u2600 Day';
+    b.title = day ? 'Switch to the night theme' : 'Switch to the day theme'; }
+  window.toggleTheme = function(){
+    var t = cur() === 'light' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', t);
+    try{ localStorage.setItem('pathfinder-theme', t); }catch(e){}
+    label();
+  };
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', label); else label();
+})();
+"""
 SRC_ORDER = ["GO:BP", "GO:MF", "GO:CC", "KEGG", "REAC"]
 SRC_LABEL = {"GO:BP": "GO:BP — Biological process", "GO:MF": "GO:MF — Molecular function",
              "GO:CC": "GO:CC — Cellular component", "KEGG": "KEGG", "REAC": "Reactome"}
@@ -556,7 +625,22 @@ def _resume_html(resume):
 
 EXPORT_JS = """
 (function(){
-  var BG = '#0d1117';
+  var BG_NIGHT = '#0d1117';
+  function isDay(){ return document.documentElement.getAttribute('data-theme') === 'light'; }
+  function bg(){ return isDay() && typeof PF_LIGHT_BG !== 'undefined' ? PF_LIGHT_BG : BG_NIGHT; }
+  // day theme: the page recolours figures with CSS; an exported file has no such CSS,
+  // so the same swaps are written into the copy's attributes
+  function dayColours(root){
+    if(!isDay() || typeof PF_LIGHT_SWAP === 'undefined') return;
+    var els = [root].concat(Array.prototype.slice.call(root.querySelectorAll('*')));
+    els.forEach(function(el){
+      ['fill', 'stroke'].forEach(function(a){
+        var v = el.getAttribute(a); if(!v) return; var k = v.trim().toLowerCase();
+        if(PF_LIGHT_SWAP[k]) el.setAttribute(a, PF_LIGHT_SWAP[k]);
+        else if(a === 'fill' && /^(text|tspan)$/i.test(el.tagName) && PF_LIGHT_TEXT[k]) el.setAttribute(a, PF_LIGHT_TEXT[k]);
+      });
+    });
+  }
   function slug(s){ return (s||'figure').toString().trim().toLowerCase()
       .replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'').slice(0,60) || 'figure'; }
   function headText(h){
@@ -598,10 +682,11 @@ EXPORT_JS = """
     // serialised as a standalone document: drop it before fixing explicit sizes.
     c.removeAttribute('style');
     c.setAttribute('width', w); c.setAttribute('height', h);
-    var bg = document.createElementNS('http://www.w3.org/2000/svg','rect');
-    bg.setAttribute('x',0); bg.setAttribute('y',0);
-    bg.setAttribute('width',w); bg.setAttribute('height',h); bg.setAttribute('fill',BG);
-    c.insertBefore(bg, c.firstChild);
+    dayColours(c);
+    var back = document.createElementNS('http://www.w3.org/2000/svg','rect');
+    back.setAttribute('x',0); back.setAttribute('y',0);
+    back.setAttribute('width',w); back.setAttribute('height',h); back.setAttribute('fill',bg());
+    c.insertBefore(back, c.firstChild);
     // XMLSerializer emits the SVG namespace itself; declaring it by hand would
     // produce a duplicate xmlns attribute and an unparseable document.
     var txt = new XMLSerializer().serializeToString(c);
@@ -629,7 +714,7 @@ EXPORT_JS = """
         var cv = document.createElement('canvas');
         cv.width = Math.round(o.w * scale); cv.height = Math.round(o.h * scale);
         var ctx = cv.getContext('2d');
-        ctx.fillStyle = BG; ctx.fillRect(0, 0, cv.width, cv.height);
+        ctx.fillStyle = bg(); ctx.fillRect(0, 0, cv.width, cv.height);
         ctx.drawImage(img, 0, 0, cv.width, cv.height);
         dl(cv.toDataURL('image/png'), name + '.png');
       } catch(err){
@@ -646,7 +731,7 @@ EXPORT_JS = """
     var out = document.createElement('canvas');
     out.width = cv.width; out.height = cv.height;
     var ctx = out.getContext('2d');
-    ctx.fillStyle = BG; ctx.fillRect(0,0,out.width,out.height);
+    ctx.fillStyle = bg(); ctx.fillRect(0,0,out.width,out.height);
     ctx.drawImage(cv, 0, 0);
     dl(out.toDataURL('image/png'), name+'.png');
   }
@@ -1058,63 +1143,68 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
         f"<section id='sec-{i}' data-name='{_esc(t)}' class='panel' style='display:{'block' if i==0 else 'none'}'>{panels[t]}</section>"
         for i, t in enumerate(tabs))
 
-    doc = f"""<!doctype html><html lang='en'><head><meta charset='utf-8'>
+    doc = f"""<!doctype html><html lang='en' data-theme='dark'><head><meta charset='utf-8'>
+<script>{THEME_HEAD_JS}</script>
 <meta name='viewport' content='width=device-width, initial-scale=1'>
 <title>Pathfinder — Exploration & Synthesis Report</title>
 <style>
-*{{box-sizing:border-box}} body{{margin:0;background:{BG};color:{FG};
+{theme_css()}
+*{{box-sizing:border-box}} body{{margin:0;background:var(--bg);color:var(--fg);
  font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px}}
-header{{padding:14px 22px;border-bottom:1px solid {GRID};display:flex;align-items:center;gap:14px}}
+header{{padding:14px 22px;border-bottom:1px solid var(--grid);display:flex;align-items:center;gap:14px}}
 header .logo{{width:46px;height:46px;flex:none;display:block}}
 header .logo svg{{width:46px;height:46px;display:block}}
 header img.logo{{width:46px;height:auto;border-radius:8px;flex:none}}
 header .brand{{display:flex;flex-direction:column;gap:1px;line-height:1.25}}
-header .brand .t{{font-size:20px;font-weight:700;color:#fff}}
-header .brand .s{{font-size:11px;color:{MUT};letter-spacing:.02em}}
-header .brand .a{{font-size:11px;color:{BLUE}}}
-nav{{display:flex;gap:6px;padding:10px 24px;border-bottom:1px solid {GRID};flex-wrap:wrap}}
-.tab{{background:{PANEL};color:{FG};border:1px solid {GRID};border-radius:6px;padding:7px 14px;cursor:pointer;font-size:13px}}
-.tab.active{{background:{BLUE};border-color:{BLUE};color:#fff}}
+header .brand .t{{font-size:20px;font-weight:700;color:var(--hi)}}
+header .brand .s{{font-size:11px;color:var(--mut);letter-spacing:.02em}}
+header .brand .a{{font-size:11px;color:var(--blue)}}
+nav{{display:flex;gap:6px;padding:10px 24px;border-bottom:1px solid var(--grid);flex-wrap:wrap}}
+.tab{{background:var(--panel);color:var(--fg);border:1px solid var(--grid);border-radius:6px;padding:7px 14px;cursor:pointer;font-size:13px}}
+.tab.active{{background:var(--blue);border-color:var(--blue);color:#fff}}
 main{{padding:20px 24px;max-width:1500px}}
-h3{{color:#fff;font-size:14px;margin:22px 0 8px;font-weight:600}}
+h3{{color:var(--hi);font-size:14px;margin:22px 0 8px;font-weight:600}}
 .cards{{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px}}
-.kpi{{background:{PANEL};border:1px solid {GRID};border-radius:8px;padding:14px 18px;min-width:120px}}
-.kv{{font-size:24px;font-weight:700;color:#fff}} .kl{{color:{MUT};font-size:11px;margin-top:2px}}
+.kpi{{background:var(--panel);border:1px solid var(--grid);border-radius:8px;padding:14px 18px;min-width:120px}}
+.kv{{font-size:24px;font-weight:700;color:var(--hi)}} .kl{{color:var(--mut);font-size:11px;margin-top:2px}}
 .grid2{{display:grid;grid-template-columns:1fr 1fr;gap:18px}}
 @media(max-width:820px){{.grid2{{grid-template-columns:1fr}}}}
 table{{border-collapse:collapse;width:100%;margin:6px 0 12px;font-size:12px}}
-th,td{{border:1px solid {GRID};padding:5px 8px;text-align:left}} th{{background:{PANEL};color:{FG}}}
-td{{color:{FG}}} tbody tr:nth-child(even){{background:#11161d}}
-.mut{{color:{MUT};font-size:12px}} .warn{{color:{AMBER};font-size:12px;border-left:3px solid {AMBER};padding-left:8px}}
+th,td{{border:1px solid var(--grid);padding:5px 8px;text-align:left}} th{{background:var(--panel);color:var(--fg)}}
+td{{color:var(--fg)}} tbody tr:nth-child(even){{background:var(--stripe)}}
+.mut{{color:var(--mut);font-size:12px}} .warn{{color:var(--amber);font-size:12px;border-left:3px solid var(--amber);padding-left:8px}}
 ul.resume{{margin:6px 0 4px;padding-left:20px}} ul.resume li{{margin:5px 0;line-height:1.5}}
 ul.resume li.warn{{list-style:none;margin-left:-12px}}
 .vcards{{display:flex;gap:10px;flex-wrap:wrap;margin:4px 0 18px}}
-.vcard{{background:{PANEL};border:1px solid {GRID};border-radius:8px;padding:10px 14px;min-width:170px;flex:1 1 170px}}
-.vcard .vl{{color:{MUT};font-size:10px;letter-spacing:.06em;text-transform:uppercase}}
-.vcard .vv{{color:#fff;font-size:18px;font-weight:700;margin:3px 0 2px;line-height:1.2}}
-.vcard .vd{{color:{MUT};font-size:11px;line-height:1.35}}
-.verdict{{background:{PANEL};border-left:3px solid {GREEN};border-radius:6px;
- padding:10px 14px;margin:6px 0 16px;font-size:13px;color:{FG}}}
-code{{background:{PANEL};padding:1px 5px;border-radius:4px;color:{PURP}}}
-.goctl{{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:6px 0 10px;font-size:12px;color:{FG}}}
-.goctl select{{background:{PANEL};color:{FG};border:1px solid {GRID};border-radius:5px;padding:3px 6px;font-size:12px}}
-.golegend{{display:flex;flex-wrap:wrap;gap:6px 16px;margin:8px 0 4px;font-size:11px;color:{FG}}}
+.vcard{{background:var(--panel);border:1px solid var(--grid);border-radius:8px;padding:10px 14px;min-width:170px;flex:1 1 170px}}
+.vcard .vl{{color:var(--mut);font-size:10px;letter-spacing:.06em;text-transform:uppercase}}
+.vcard .vv{{color:var(--hi);font-size:18px;font-weight:700;margin:3px 0 2px;line-height:1.2}}
+.vcard .vd{{color:var(--mut);font-size:11px;line-height:1.35}}
+.verdict{{background:var(--panel);border-left:3px solid var(--green);border-radius:6px;
+ padding:10px 14px;margin:6px 0 16px;font-size:13px;color:var(--fg)}}
+code{{background:var(--panel);padding:1px 5px;border-radius:4px;color:var(--purp)}}
+.goctl{{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:6px 0 10px;font-size:12px;color:var(--fg)}}
+.goctl select{{background:var(--panel);color:var(--fg);border:1px solid var(--grid);border-radius:5px;padding:3px 6px;font-size:12px}}
+.golegend{{display:flex;flex-wrap:wrap;gap:6px 16px;margin:8px 0 4px;font-size:11px;color:var(--fg)}}
 .golegend .legit{{display:flex;align-items:center;gap:5px}}
 .golegend .sw{{width:10px;height:10px;border-radius:2px;display:inline-block}}
 .figwrap{{position:relative;display:block;width:fit-content;max-width:100%;margin:2px 0}}
 .figbtns{{position:absolute;top:4px;right:4px;display:flex;gap:4px;opacity:0;transition:opacity .15s}}
 .figwrap:hover .figbtns{{opacity:1}}
-.figbtn{{background:{PANEL};color:{FG};border:1px solid {GRID};border-radius:4px;
+.figbtn{{background:var(--panel);color:var(--fg);border:1px solid var(--grid);border-radius:4px;
  padding:2px 7px;font-size:10px;cursor:pointer;line-height:1.5}}
-.figbtn:hover{{background:{BLUE};border-color:{BLUE};color:#fff}}
+.figbtn:hover{{background:var(--blue);border-color:var(--blue);color:#fff}}
 .rdnav{{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 6px}}
-.rdnav a{{color:{BLUE};text-decoration:none;font-size:12px;border:1px solid {GRID};border-radius:14px;padding:3px 11px}}
-.rdnav a:hover{{border-color:{BLUE}}}
+.rdnav a{{color:var(--blue);text-decoration:none;font-size:12px;border:1px solid var(--grid);border-radius:14px;padding:3px 11px}}
+.rdnav a:hover{{border-color:var(--blue)}}
 .rdfig{{margin:6px 0 18px}}
-svg.rd .pt:hover{{stroke:#fff;stroke-width:1.6}}
+svg.rd .pt:hover{{stroke:var(--hi);stroke-width:1.6}}
 svg.rd .lg.off{{opacity:.35}}
+.themebtn{{margin-left:auto;background:var(--panel);color:var(--fg);border:1px solid var(--grid);
+ border-radius:16px;padding:5px 13px;font-size:12px;cursor:pointer;white-space:nowrap}}
+.themebtn:hover{{border-color:var(--blue)}}
 </style></head><body>
-<header>{(f"<span class='logo'>{b['icon_svg']}</span>" if b.get('icon_svg') else (f"<img class='logo' src='data:image/png;base64,{b['icon_b64']}' alt=''/>" if b['icon_b64'] else ""))}<div class='brand'><span class='t'>{_esc(b['title'])}</span><span class='s'>{_esc(b['subtitle'])}</span><span class='a'>{_esc(b['affiliation'])}</span></div></header>
+<header>{(f"<span class='logo'>{b['icon_svg']}</span>" if b.get('icon_svg') else (f"<img class='logo' src='data:image/png;base64,{b['icon_b64']}' alt=''/>" if b['icon_b64'] else ""))}<div class='brand'><span class='t'>{_esc(b['title'])}</span><span class='s'>{_esc(b['subtitle'])}</span><span class='a'>{_esc(b['affiliation'])}</span></div><button id='themeBtn' class='themebtn' onclick='toggleTheme()'>&#9728; Day</button></header>
 <nav>{nav}</nav>
 <main>{sections}</main>
 <script>
@@ -1123,6 +1213,8 @@ function show(i){{document.querySelectorAll('.panel').forEach(p=>p.style.display
  document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
  event.target.classList.add('active');}}
 </script>
+<script>{THEME_JS}</script>
+<script>var PF_LIGHT_SWAP={json.dumps(LIGHT_SWAP)}, PF_LIGHT_TEXT={json.dumps(LIGHT_TEXT)}, PF_LIGHT_BG='{THEME_VARS["light"]["bg"]}';</script>
 <script>{EXPORT_JS}</script>
 <script>{READING_JS}</script>
 </body></html>"""

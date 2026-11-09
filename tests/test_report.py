@@ -187,6 +187,48 @@ class TestHtmlReport:
     def test_lang_is_english(self, html):
         assert "lang='en'" in html
 
+    def test_day_night_button(self, html):
+        """Night by default; the button switches to day and the choice is remembered."""
+        assert "<html lang='en' data-theme='dark'>" in html
+        assert "id='themeBtn'" in html and "onclick='toggleTheme()'" in html
+        assert "window.toggleTheme" in html and "localStorage.setItem('pathfinder-theme'" in html
+        head = html.split("</head>")[0]
+        assert "localStorage.getItem('pathfinder-theme')" in head and "try{" in head  # before paint
+        assert ":root,html[data-theme=dark]{--bg:#0d1117" in html
+        assert "html[data-theme=light]{--bg:#ffffff" in html
+
+    def test_page_css_has_no_hard_coded_night_colour(self, html):
+        """Every page colour goes through a variable, so the day theme reaches it."""
+        css = html.split("<style>")[1].split("</style>")[0]
+        rest = "\n".join(l for l in css.splitlines()
+                         if not l.startswith((":root", "html[data-theme")))
+        for c in ("#0d1117", "#161b22", "#30363d", "#c9d1d9", "#8b949e", "#11161d"):
+            assert c not in rest, c
+
+    def test_day_theme_covers_every_neutral_figure_colour(self, html):
+        """A grey added to a figure without a day equivalent would stay dark on white."""
+        import build_report_html as B
+        main = html.split("<main>")[1].split("</main>")[0]
+        used = set(v.lower() for v in re.findall(r"(?:fill|stroke)='(#[0-9a-fA-F]{3,6})'", main))
+        assert used, "no coloured figure element found"
+
+        def grey(h):
+            h = h.lstrip("#")
+            h = "".join(ch * 2 for ch in h) if len(h) == 3 else h
+            r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+            return max(r, g, b) - min(r, g, b) < 30
+        missing = sorted(c for c in used if grey(c) and c not in B.LIGHT_SWAP)
+        assert not missing, f"neutral colours without a day equivalent: {missing}"
+        for a in B.LIGHT_SWAP:
+            assert f"main svg [fill='{a}' i]" in html
+
+    def test_export_follows_the_theme(self, html):
+        assert "dayColours(c);" in html and "fill',bg()" in html
+        swap = re.search(r"var PF_LIGHT_SWAP=(\{.*?\}), PF_LIGHT_TEXT=(\{.*?\})", html)
+        import json
+        assert json.loads(swap.group(1))["#0d1117"] == "#ffffff"
+        assert json.loads(swap.group(2))["#bc8cff"] == "#8250df"
+
 
 class TestRepositoryInvariants:
     def test_syntax_is_compatible_with_python_39_to_312(self):
