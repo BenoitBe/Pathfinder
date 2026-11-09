@@ -1396,7 +1396,7 @@ def fig_factor_profiles(run, prog, F, r, cf=None):
          title_block(14, 20, "Programmes by design factor",
                      f"median z of each programme · x = {x} · one line per {lines}"
                      + (f" · panels = {facets[0]}" if facets else "")
-                     + (f" · {ref} in white" if ref else "")
+                     + (f" · {ref} = reference (neutral line)" if ref else "")
                      + (" · hollow = shared start" if shared else "") + " · click the legend")]
     xl, yl = 14, 60
     for i, l in enumerate(lv_l):

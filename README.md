@@ -293,6 +293,10 @@ a link is missing.
 Every figure carries **SVG** and **PNG** export buttons (hover over it): vector SVG for
 Illustrator/Inkscape, 2× PNG for slides. Filenames are derived from the figure title.
 
+A **☀ Day / ☾ Night** button (top right) switches the whole report, figures included, between
+the night theme (default) and a day theme on white; the choice is remembered by the browser.
+Exports follow the theme on screen.
+
 **Excel sheets**: provenance · Summary · Proteins_core · Proteins_matrix ·
 WGCNA_module_condition · WGCNA_core_enrichment · WGCNA_hubs · MetaGO_matrix · MetaGO_directionality ·
 Contrast_similarity · PCA_scores · PCA_loadings · PC_factor_assoc · PC_factor_multi ·
