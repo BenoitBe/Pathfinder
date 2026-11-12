@@ -203,6 +203,18 @@ COLUMNS = [
                                  "higher-order condition effects, or by the replicates"),
     ("Variance_partition", "<term>", "median share over the proteins of the set (all selected, "
                                      "then each programme)"),
+    ("Programme_groups", "shared", "proteins shared by a programme and a functional group, "
+                                   "with the number expected under independence and the "
+                                   "hypergeometric q"),
+    ("FC_vs_FC", "slope", "every pair of contrasts: shared DEP, standardised major-axis "
+                          "slope on the shared DEP, Pearson r, sign concordance over the "
+                          "union, quadrant counts"),
+    ("Variance_quantiles", "q1 / median / q3",
+     "quartiles of the per-protein variance shares, for the selected proteins and for all "
+     "quantified proteins (the background of the violins)"),
+    ("Variance_shares", "var_<term>", "same shares as in Programmes, for every quantified "
+                                      "protein without missing value; selected = protein of "
+                                      "the selection"),
     ("Groups", "group_id", "G1 = group with the best term; same groups as the Functional groups "
                            "figure"),
     ("Groups", "metago_cluster", "Meta-GO redundancy_cluster (MetaGO_matrix sheet)"),
@@ -214,7 +226,8 @@ COLUMNS = [
 ]
 
 
-def reading_tables(run, design, prog=None, groups=None, sections=(), kpis=(), fact=None) -> dict:
+def reading_tables(run, design, prog=None, groups=None, sections=(), kpis=(), fact=None,
+                   fc=None, prog_groups=None) -> dict:
     """{sheet name: DataFrame} for the synthesis workbook."""
     sheets = {}
     labels = run.labels.to_dict() if run.labels is not None else {}
@@ -232,10 +245,28 @@ def reading_tables(run, design, prog=None, groups=None, sections=(), kpis=(), fa
     if groups is not None:
         g, gt, gx = themes_tables(run, groups, prog, labels)
         sheets["Groups"], sheets["Group_terms"], sheets["Group_x_contrast"] = g, gt, gx
+    if prog_groups is not None and not prog_groups.empty:
+        sheets["Programme_groups"] = prog_groups.drop(columns="theme")
+    if fc is not None and not fc.empty:
+        f = fc.copy()
+        f.insert(0, "x", [run.short(c) for c in f.contrast_x])
+        f.insert(1, "y", [run.short(c) for c in f.contrast_y])
+        sheets["FC_vs_FC"] = f.sort_values("shared", ascending=False)
     if fact and fact.get("summary") is not None:
         vp = fact["summary"].copy()
         vp.insert(1, "factors", ", ".join(fact["F"].columns) + f" ({fact['source']})")
         sheets["Variance_partition"] = vp
+        R = fact.get("S_ref")
+        if R is not None and not R.empty:
+            from .svg import variance_quantiles
+            sheets["Variance_quantiles"] = variance_quantiles(fact["S"], R, fact["terms"])
+            V = R.drop(columns="sum").round(3).add_prefix("var_")
+            V.insert(0, "selected", V.index.isin(fact["S"].index))
+            if prog is not None:
+                V.insert(1, "programme", [f"P{int(x)}" if pd.notna(x) else ""
+                                          for x in prog.labels.reindex(V.index)])
+            V.insert(0, "name", [labels.get(i, "") for i in V.index])
+            sheets["Variance_shares"] = V.rename_axis("protein").reset_index()
         sheets["Design_factors"] = fact["F"].rename_axis("condition").reset_index()
     sheets["Reading_columns"] = pd.DataFrame(COLUMNS, columns=["sheet", "column", "meaning"])
     return sheets

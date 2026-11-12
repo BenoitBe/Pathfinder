@@ -22,10 +22,11 @@ COND_PALETTE = ["#388bfd", "#3fb950", "#bc8cff", "#d29922", "#f85149", "#39c5cf"
 # The same maps recolour an exported SVG / PNG when the day theme is on.
 THEME_VARS = {
     "dark": {"bg": BG, "panel": PANEL, "grid": GRID, "fg": FG, "mut": MUT, "hi": "#ffffff",
-             "stripe": "#11161d", "blue": BLUE, "amber": AMBER, "green": GREEN, "purp": PURP},
+             "stripe": "#11161d", "blue": BLUE, "amber": AMBER, "green": GREEN, "purp": PURP,
+             "red": UP},
     "light": {"bg": "#ffffff", "panel": "#f6f8fa", "grid": "#d0d7de", "fg": "#1f2328", "mut": "#59636e",
               "hi": "#1f2328", "stripe": "#f6f8fa", "blue": "#0969da", "amber": "#9a6700",
-              "green": "#1a7f37", "purp": "#8250df"},
+              "green": "#1a7f37", "purp": "#8250df", "red": "#cf222e"},
 }
 LIGHT_SWAP = {
     "#0d1117": "#ffffff",   # BG
@@ -36,6 +37,7 @@ LIGHT_SWAP = {
     "#c9d1d9": "#1f2328",   # FG
     "#8b949e": "#59636e",   # MUT
     "#6e7681": "#6e7781",
+    "#57606a": "#8c959f",   # edges of the functional-group network
     "#e6edf3": "#8c959f",   # diagonal of the correlation heatmaps
     "#ffffff": "#1f2328",   # white text and lines (titles, means, reference level)
     "#fff": "#1f2328",
@@ -782,6 +784,25 @@ READING_JS = """
 
 def _reading_html(reading):
     """"Biological reading" tab (ex-InSight): numeric facts + SVG figures."""
+    if reading and reading.get("error"):
+        # The reading failed: keep the tab and say why. Dropping the tab leaves the
+        # reason in pathfinder_log.txt alone, where nobody looks — a report missing
+        # a whole section has to say so itself.
+        e = reading["error"]
+        out = ["<div class='failbox'><h4>\u26a0 Biological reading failed</h4>",
+               "<p>This tab is empty: the biological reading raised an error, so its "
+               "programmes, functional groups and figures could not be computed. "
+               "Everything else in this report is unaffected.</p>",
+               f"<p><code>{_esc(str(e))}</code></p>"]
+        if "SyntaxError" in str(e) or "ImportError" in str(e):
+            out.append("<p>A <code>SyntaxError</code> or <code>ImportError</code> here "
+                       "means the <code>reading/</code> package could not be loaded at "
+                       "all — usually a partial update, or a Python older than the one "
+                       "the code was written for. Check that the whole "
+                       "<code>reading/</code> folder matches <code>pathfinder.py</code>.</p>")
+        out.append("<p class='mut'>Full traceback: set <code>PATHFINDER_DEBUG=1</code> "
+                   "and run Pathfinder again.</p></div>")
+        return "".join(out)
     if not reading or not reading.get("sections"):
         return ("<p class='mut'>Biological reading unavailable: it needs the differential "
                 "results and, for the programmes and the spotlight, per-sample abundances "
@@ -1173,6 +1194,10 @@ table{{border-collapse:collapse;width:100%;margin:6px 0 12px;font-size:12px}}
 th,td{{border:1px solid var(--grid);padding:5px 8px;text-align:left}} th{{background:var(--panel);color:var(--fg)}}
 td{{color:var(--fg)}} tbody tr:nth-child(even){{background:var(--stripe)}}
 .mut{{color:var(--mut);font-size:12px}} .warn{{color:var(--amber);font-size:12px;border-left:3px solid var(--amber);padding-left:8px}}
+.failbox{{border:1px solid var(--red);border-left:5px solid var(--red);border-radius:6px;padding:12px 14px;margin:4px 0 14px}}
+.failbox h4{{margin:0 0 6px;color:var(--red);font-size:14px}}
+.failbox code{{background:var(--panel);padding:1px 5px;border-radius:3px;font-size:12px;word-break:break-word}}
+.failbox p{{margin:6px 0;font-size:13px}}
 ul.resume{{margin:6px 0 4px;padding-left:20px}} ul.resume li{{margin:5px 0;line-height:1.5}}
 ul.resume li.warn{{list-style:none;margin-left:-12px}}
 .vcards{{display:flex;gap:10px;flex-wrap:wrap;margin:4px 0 18px}}

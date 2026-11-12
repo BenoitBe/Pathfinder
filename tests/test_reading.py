@@ -11,6 +11,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
+
+def _esc_in(svg, text):
+    """The figures escape their tooltips, so compare on the escaped form."""
+    import html as _h
+    return _h.escape(text) in svg or text in svg
+
 import axis_meta_go
 import axis_proteins
 import io_layer
@@ -437,6 +443,251 @@ def test_factorial_design_variance_partition(tmp_path):
     assert "var_Light/Dark" in t["Programmes"] and "reading_factors" in res["meta"]
 
 
+def test_radar_only_for_a_small_design(tmp_path):
+    """One spoke per condition, one polygon per programme, on one common z scale. Beyond
+    eight conditions the figure is unreadable, so it is not drawn at all."""
+    from reading.factors import Design
+    from reading.svg import fig_radar
+    root = _hordeum(tmp_path)
+    run, d, prog = _prog(root)
+    assert len(d.conditions) > 8 and fig_radar(run, prog, d) is None
+
+    small = Design(**{**d.__dict__, "conditions": list(prog.z.columns[:6])})
+    out = fig_radar(run, prog, small)
+    assert out is not None
+    svg, f = out
+    assert f["n_cond"] == 6 and f["k"] == prog.k
+    for c in small.conditions:
+        assert _esc_in(svg, str(c))
+    assert svg.count("<path class='pt'") == prog.k          # one closed polygon per programme
+    assert "z = 0" in svg                                   # the reference ring is drawn
+    for p in range(1, prog.k + 1):
+        assert f"data-t='P{p}'" in svg                      # clickable legend
+    # the radii follow the median z, on one scale shared by every programme
+    M = pd.DataFrame({c: prog.z[c].groupby(prog.labels.reindex(prog.z.index)).median()
+                      for c in small.conditions})
+    hi = M.max().idxmax()
+    assert _esc_in(svg, f"highest in {hi}") or _esc_in(svg, "highest in ")
+    # fewer than three conditions: nothing to draw
+    assert fig_radar(run, prog, Design(**{**d.__dict__,
+                                         "conditions": list(prog.z.columns[:2])})) is None
+
+
+def test_dynamic_range_and_programme_groups(tmp_path):
+    """Dynamic range with the DEP marked (is the signal just abundance?) and the
+    bipartite programme x functional group graph."""
+    from reading.programmes import theme_overlaps
+    from reading.svg import fig_dynamic_range, fig_programme_groups
+    root = _hordeum(tmp_path)
+    res = _reading(root, n_boot=0)
+    ids = _ids(res)
+    assert "dynamic-range" in ids and "programme-groups" in ids
+    dr = next(s for s in res["sections"] if s["id"] == "dynamic-range")["svgs"][0]
+    pg = next(s for s in res["sections"] if s["id"] == "programme-groups")["svgs"][0]
+    assert "orders of magnitude" in dr and "data-t='dep'" in dr
+    assert dr.count("decile") >= 10                       # one tooltip per decile, plus the axis
+    run, prog, groups = res["run"], res["prog"], res["groups"]
+
+    # the curve spans every protein with a mean abundance, and the DEP count matches the rule
+    v = run.means.mean(axis=1).dropna()
+    assert f"{len(v)} proteins ranked" in dr
+    sig = pd.Series(False, index=run.de.index)
+    for c in run.contrasts:
+        sig = sig | run.sig(c).fillna(False)
+    n_sig = int(sig.reindex(v.index).fillna(False).sum())
+    assert f"{n_sig} DEP" in dr
+
+    # the overlap table is a proper hypergeometric test, BH over the whole table
+    O = theme_overlaps(prog.labels, groups)
+    assert not O.empty and (O.q >= O.p).all() and (O.q <= 1).all()
+    assert (O.shared <= O[["n_programme", "n_group"]].min(axis=1)).all()
+    assert (O.expected > 0).all()
+    sheet = res["tables"]["Programme_groups"]
+    assert len(sheet) == len(O) and "theme" not in sheet.columns
+    assert "Programme_groups" in set(res["tables"]["Reading_columns"]["sheet"])
+    for g in O.group.head(2):
+        assert _esc_in(pg, str(g))
+    # no programmes or no groups: no figure, no crash
+    assert fig_programme_groups(run, None, groups) is None
+    assert fig_programme_groups(run, prog, None) is None
+    assert fig_dynamic_range(type(run)(**{**run.__dict__, "means": None,
+                                          "abundance": None})) is None
+
+
+def test_slope_graph_and_bump_chart(tmp_path):
+    """Two factorial views: end-to-end change per protein, and the order of the programmes
+    along the ordered factor. Labels must not sit on top of one another."""
+    from reading.svg import _dodge, _level_means, fig_bump_chart, fig_slope_graph
+    root = _hordeum(tmp_path)
+    res = _reading(root, n_boot=0)
+    assert "factor-order" in _ids(res)
+    sec = next(s for s in res["sections"] if s["id"] == "factor-order")
+    slope, bump = sec["svgs"]
+    assert "From T0 to T7" in slope and "data-t='up'" in slope and "data-t='down'" in slope
+    assert "Order of the programmes along time" in bump
+
+    run, prog = res["run"], res["prog"]
+    F = res["design_factors"]["F"] if "design_factors" in res else None
+    # the end-to-end values are means over the conditions that share the level
+    from reading.factorial import design_factors, roles
+    F, _ = design_factors(run, list(run.conditions))
+    r = roles(F)
+    L = _level_means(run, F, r["x"], ["T0", "T7"])
+    conds = [c for c in F.index[F[r["x"]].astype(str) == "T7"] if c in run.means.columns]
+    assert np.allclose(L["T7"].dropna(), run.means[conds].mean(axis=1).reindex(L.index).dropna())
+
+    # every drawn protein has its two ends and a change in the tooltip
+    assert slope.count("<line class='pt'") == int(slope.split(" proteins moving")[0].split(">")[-1])
+    # labels are spread apart around their own centre, order kept, isolated ones unmoved
+    ys = [10.0, 10.2, 10.4, 40.0]
+    out = _dodge(ys, 12.0)
+    assert all(out[i + 1] - out[i] >= 11.99 for i in range(3))
+    assert out == sorted(out) and abs(out[-1] - 40.0) < 1e-9       # 40 is not dragged down
+    assert abs(sum(out[:3]) / 3 - sum(ys[:3]) / 3) < 1e-9          # the block keeps its centre
+    assert _dodge([0.0, 100.0], 10.0) == [0.0, 100.0]              # nothing to do
+    kept = _dodge([5.0] * 4, 10.0, 0.0, 100.0)                     # clamped into the box
+    assert kept[0] >= -1e-9 and kept[-1] <= 100 + 1e-9
+
+    # the bump chart ranks the programmes 1..k inside each panel and each level
+    import re as _re
+    ranks = _re.findall(r"programme P(\d+): rank ([^<\n]+)", bump)
+    assert len(ranks) >= prog.k
+    seen = [tuple(int(x.split()[-1]) for x in r.split(" → ")) for _, r in ranks]
+    assert all(set(col) == set(range(1, prog.k + 1)) for col in zip(*seen))
+    # fewer than three levels, or fewer than three programmes: no bump chart
+    assert fig_bump_chart(run, prog, F[[c for c in F.columns][:1]].iloc[:2], r) is None
+    assert fig_slope_graph(run, None, r, prog) is None
+
+
+def test_go_treemap_and_term_tree(tmp_path):
+    """The treemap sizes each term by its evidence; the tree is the very clustering the
+    Meta-GO groups come from, so cutting it at --jaccard must give those groups back."""
+    from scipy.cluster.hierarchy import fcluster, linkage
+    from axis_meta_go import _jaccard_condensed
+    from reading.svg import _squarify, fig_go_treemap, fig_term_tree
+    root = _hordeum(tmp_path)
+    res = _reading(root, n_boot=0)
+    assert "go-terms" in _ids(res)
+    sec = next(s for s in res["sections"] if s["id"] == "go-terms")
+    assert len(sec["svgs"]) == 2
+    tm, tree = sec["svgs"]
+    assert "area = −log10(q)" in tm and "<rect" in tm
+    assert "1 − Jaccard" in tree and "cut 0.5" in tree
+
+    groups = res["groups"]
+    T = groups.terms.sort_values("p").head(60).reset_index(drop=True)
+    # every drawn term carries its name, its q and its group in the tooltip
+    for nm in T.name.head(3):
+        assert _esc_in(tm, str(nm)) and _esc_in(tree, str(nm))
+    # cutting the drawn tree at 0.5 reproduces the groups of those terms
+    Z = linkage(_jaccard_condensed(list(T.genes)), method="average")
+    cut = fcluster(Z, t=0.5, criterion="distance")
+    pairs_same = {(i, j) for i in range(len(T)) for j in range(i + 1, len(T))
+                  if cut[i] == cut[j]}
+    groups_same = {(i, j) for i in range(len(T)) for j in range(i + 1, len(T))
+                   if T.theme[i] == T.theme[j]}
+    assert pairs_same == groups_same
+
+    # squarified layout: tiles fill the box, areas follow the values, none overlap
+    vals = [9.0, 6.0, 4.0, 3.0, 1.0]
+    rects = _squarify(vals, 0, 0, 100, 60)
+    assert len(rects) == len(vals)
+    area = sum(w * h for _, _, w, h in rects)
+    assert abs(area - 100 * 60) < 1.0
+    big, small = rects[0], rects[-1]
+    assert big[2] * big[3] > small[2] * small[3] * 5
+    for x, y, w, h in rects:
+        assert -1e-6 <= x and -1e-6 <= y and x + w <= 100.001 and y + h <= 60.001
+
+    # fewer than three terms: no tree, and no section crash
+    few = type(groups)(**{**groups.__dict__, "terms": groups.terms.head(2)})
+    assert fig_term_tree(res["run"], few) is None
+    assert fig_go_treemap(res["run"], None) is None
+
+
+def test_fc_vs_fc_slope_on_the_shared_dep(tmp_path):
+    """log2FC against log2FC: the major-axis slope is fitted on the shared DEP only. On the
+    union, proteins significant in one contrast alone form a cross that pulls the slope."""
+    from reading.svg import _major_axis, fc_pairs, fig_fc_matrix
+    root = _hordeum(tmp_path)
+    res = _reading(root, n_boot=0)
+    ids = _ids(res)
+    assert "fc-vs-fc" in ids
+    sec = next(s for s in res["sections"] if s["id"] == "fc-vs-fc")
+    assert len(sec["svgs"]) >= 2                       # the matrix, then the scatters
+    mat, sca = sec["svgs"][0], sec["svgs"][1]
+    assert "How the contrasts relate" in mat and "log2 slope" in mat
+    for k in ("ns", "x", "y", "same", "opp"):
+        assert f"data-g='{k}'" in sca and f"data-t='{k}'" in sca
+
+    P = res["tables"]["FC_vs_FC"]
+    run = res["run"]
+    n = len([c for c in run.contrasts if c + "_diff" in run.de.columns])
+    assert len(P) == n * (n - 1) // 2                  # every unordered pair, once
+    assert (P.shared <= P[["dep_x", "dep_y"]].min(axis=1)).all()
+    ok = P[P.shared >= 5]
+    assert len(ok) and ok.slope.notna().all() and (ok.jaccard.between(0, 1)).all()
+    assert P.loc[P.shared < 5, "slope"].isna().all()
+
+    # the slope of the sheet is the one of the shared DEP, not of the union
+    r = ok.sort_values("shared", ascending=False).iloc[0]
+    cx, cy = r.contrast_x, r.contrast_y
+    X, Y = run.de[cx + "_diff"].astype(float), run.de[cy + "_diff"].astype(float)
+    sx, sy = run.sig(cx).fillna(False), run.sig(cy).fillna(False)
+    both = sx & sy & X.notna() & Y.notna()
+    assert abs(_major_axis(X[both], Y[both]) - r.slope) < 0.01
+    union = (sx | sy) & X.notna() & Y.notna()
+    if int(union.sum()) > int(both.sum()):             # the union answer must differ
+        assert abs(_major_axis(X[union], Y[union]) - r.slope) > 1e-6
+
+    # swapping the axes inverts the slope, leaves the shared count alone
+    assert abs(_major_axis(Y[both], X[both]) * r.slope - 1) < 0.02
+    Q = fc_pairs(run).set_index(["contrast_x", "contrast_y"])
+    assert int(Q.loc[(cx, cy), "shared"]) == int(r.shared)
+    # a single contrast gives no pair and no matrix
+    one = type(run)(**{**run.__dict__, "contrasts": run.contrasts[:1]})
+    assert fc_pairs(one).empty and fig_fc_matrix(run, pd.DataFrame()) is None
+    assert "FC_vs_FC" in set(res["tables"]["Reading_columns"]["sheet"])
+
+
+def test_variance_violins_against_the_background(tmp_path):
+    """The per-protein shares are drawn as split violins against all quantified proteins:
+    the selected proteins are biased towards the factors by construction."""
+    from reading.svg import _kde01, fig_variance_violins, variance_quantiles
+    root = _hordeum(tmp_path)
+    res = _reading(root, n_boot=0)
+    ids = _ids(res)
+    assert ids.index("variance-violins") == ids.index("factors") + 1
+    sec = next(s for s in res["sections"] if s["id"] == "variance-violins")
+    svg = sec["svgs"][0]
+    assert "data-g='ref'" in svg and "data-g='sel'" in svg and "data-t='ref'" in svg
+    assert "Background = all" in sec["bullets"][1]
+    t = res["tables"]
+    q = t["Variance_quantiles"].set_index(["set", "term"])
+    assert set(q.index.get_level_values(0)) == {"selected", "all quantified"}
+    # the selection inflates the factor shares and deflates the noise share
+    assert q.loc[("selected", "replicates"), "median"] < q.loc[("all quantified", "replicates"), "median"]
+    assert (q["q1"] <= q["median"]).all() and (q["median"] <= q["q3"]).all()
+    vs = t["Variance_shares"]
+    assert vs["selected"].sum() == len(t["Programmes"]) and len(vs) > vs["selected"].sum()
+    assert {"protein", "name", "programme", "var_replicates"} <= set(vs.columns)
+    both = vs[vs.selected].set_index("protein")["var_replicates"]
+    prog = t["Programmes"].set_index("protein")["var_replicates"]
+    assert np.allclose(both.sort_index(), prog.sort_index())
+    cols = set(t["Reading_columns"]["sheet"])
+    assert {"Variance_quantiles", "Variance_shares"} <= cols
+    # density bounded to [0, 1]: reflection keeps the mass piled at 0
+    g = np.linspace(0, 1, 201)
+    d = _kde01(np.r_[np.zeros(50), np.full(50, 0.01)], g)
+    area = float(((d[1:] + d[:-1]) / 2).sum() * (g[1] - g[0]))          # trapezoid
+    assert abs(area - 1) < 0.05 and d.argmax() < 5
+    # without a background the figure still draws, with one half per term
+    S = vs[vs.selected].set_index("protein").filter(like="var_").rename(columns=lambda c: c[4:])
+    r = fig_variance_violins(S, None, [c for c in S if c not in ("higher-order", "replicates")])
+    assert r and "data-g='ref'" not in r[0][0]
+    assert len(variance_quantiles(S, None, [])) == 2
+
+
 def test_factorial_factors_from_samples_columns(tmp_path):
     from reading.factorial import design_factors
     root = _hordeum(tmp_path, samples_columns=True)
@@ -557,3 +808,67 @@ def test_glued_sex_age_names_are_a_2x2_design(tmp_path):
     assert "time" in _from_names(["WT_0h", "WT_6h", "WT_24h", "KO_0h", "KO_6h", "KO_24h"])
     emb = pd.DataFrame(_from_names([f"emb{c}{t}" for c in ("Aviso", "Major") for t in (0, 2, 8, 24)]))
     assert roles(emb)["x"] == "0/2/8/24" and roles(emb)["lines"] == "embAviso/embMajor"
+
+
+def test_every_module_compiles_on_the_oldest_supported_python():
+    """Pathfinder annonce 3.9+. Depuis 3.12 (PEP 701) une f-string peut contenir un
+    saut de ligne DANS son expression, et des guillemets identiques imbriqués : écrit
+    sur une machine récente, le fichier ne compile plus chez quelqu'un en 3.11, et
+    l'erreur ne se voit qu'à l'exécution (un onglet entier disparaît du rapport).
+    On compile donc tout avec l'interpréteur le plus ancien disponible."""
+    import pathlib
+    import shutil
+    import subprocess
+    import sys
+
+    older = next((p for v in ("3.9", "3.10", "3.11")
+                  if (p := shutil.which(f"python{v}"))), None)
+    if older is None or sys.version_info[:2] <= (3, 11):
+        pytest.skip("no older interpreter than this one available")
+    root = pathlib.Path(__file__).resolve().parent.parent
+    files = sorted(str(p) for p in root.rglob("*.py")
+                   if ".git" not in p.parts and "__pycache__" not in p.parts)
+    assert files
+    script = ("import sys\n"
+              "bad = []\n"
+              "for f in sys.argv[1:]:\n"
+              "    src = open(f, encoding='utf-8', errors='replace').read()\n"
+              "    try:\n"
+              "        compile(src, f, 'exec')\n"
+              "    except SyntaxError as e:\n"
+              "        bad.append(f'{f}:{e.lineno}: {e.msg}')\n"
+              "print('\\n'.join(bad))\n"
+              "sys.exit(1 if bad else 0)\n")
+    r = subprocess.run([older, "-c", script, *files], capture_output=True, text=True)
+    assert r.returncode == 0, f"ne compile pas avec {older} :\n{r.stdout}{r.stderr}"
+
+
+def test_a_failed_reading_keeps_the_tab_and_says_why():
+    """A failed biological reading must keep its tab and carry a banner: otherwise the
+    tab vanishes from the report and the reason lives only in pathfinder_log.txt."""
+    from build_report_html import _reading_html
+    h = _reading_html({"error": "SyntaxError: unterminated string literal (svg.py, line 1560)"})
+    assert "failbox" in h and "Biological reading failed" in h
+    assert "svg.py, line 1560" in h
+    assert "reading/" in h and "PATHFINDER_DEBUG" in h          # what to check, how to dig
+    assert "unaffected" in h                                    # the rest of the report is fine
+    # a data error, not an import one: no advice about the reading/ folder
+    h2 = _reading_html({"error": "KeyError: 'Log2_Impute'"})
+    assert "failbox" in h2 and "KeyError" in h2 and "partial update" not in h2
+    # no error and no sections: the old grey message, unchanged
+    h3 = _reading_html({"sections": []})
+    assert "failbox" not in h3 and "Biological reading unavailable" in h3
+    # the banner red exists in both themes
+    from build_report_html import THEME_VARS
+    assert THEME_VARS["dark"]["red"] and THEME_VARS["light"]["red"]
+
+
+def test_a_failed_reading_does_not_break_the_rest_of_the_report(tmp_path, monkeypatch):
+    """The error dict goes through every consumer (provenance, KPIs, workbook,
+    summary) without raising."""
+    import build_report_xlsx
+    import summary as summary_mod
+    err = {"error": "RuntimeError: boom"}
+    assert err.get("prog") is None                               # no programme KPI
+    assert ((err or {}).get("tables") or {}) == {}               # no sheet
+    assert summary_mod._reading_section(err) == []               # no summary section

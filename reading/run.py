@@ -12,7 +12,10 @@ from .groups import build_groups
 from .io import id_lookup, load_run
 from .programmes import THEME_Q_THR, build_programmes, programme_stability, stability_class
 from .svg import (fig_factor_effects, fig_factor_profiles, fig_factors, fig_groups, fig_landscape,
-                  fig_map, fig_programmes, fig_spotlight, fig_volcano)
+                  fig_bump_chart, fig_dynamic_range, fig_fc_vs_fc,
+                  fig_go_treemap, fig_map, fig_programme_groups, fig_programmes,
+                  fig_radar, fig_slope_graph, fig_spotlight, fig_term_tree,
+                  fig_variance_violins, fig_volcano, fc_pairs)
 from .tables import reading_tables
 
 
@@ -115,7 +118,11 @@ def _factorial(run, prog, fd):
     if float(S["sum"].median()) > 1.1 or float(S["sum"].median()) < 0.9:
         b.append(f"Unbalanced design: the shares of a protein sum to {float(S['sum'].median()):.2f} "
                  "(median), correlated terms share part of their variance.")
-    return {"F": F, "source": src, "S": S, "terms": terms, "summary": summ, "bullets": b}
+    # background: the same partition on every quantified protein (the selected ones were
+    # picked on between-condition differences, which inflates their factor shares)
+    S_ref, _ = variance_partition(run, list(run.abundance.index), F)
+    return {"F": F, "source": src, "S": S, "S_ref": S_ref, "terms": terms, "summary": summ,
+            "bullets": b}
 
 
 def design_text(design) -> str:
@@ -253,6 +260,28 @@ def run_reading(stats, stats_path, rule, manifest=None, go_res=None, go_long=Non
             sections.append(dict(id="factor-profiles", title="Programmes by design factor",
                                  svgs=svgs, bullets=b))
 
+    if fd:
+        sl = _safe("slope graph", fig_slope_graph, run, fd["F"], fd["roles"], prog)
+        bp = _safe("bump chart", fig_bump_chart, run, prog, fd["F"], fd["roles"])
+        if sl or bp:
+            svgs = [x[0] for x in (sl, bp) if x]
+            b = []
+            if sl:
+                f = sl[1]
+                b.append(f"End to end on {html.escape(f['factor'])}: the {f['n']} proteins "
+                         f"moving most from {html.escape(f['from'])} to "
+                         f"{html.escape(f['to'])}, {f['up']} up and {f['n'] - f['up']} down. "
+                         "Abundances averaged over the other factors, not a test.")
+            if bp:
+                f = bp[1]
+                b.append(f"Rank of the programmes along {html.escape(f['factor'])}"
+                         + (f", one panel per level ({', '.join(f['panels'])})"
+                            if f["panels"] else "")
+                         + ": crossing lines mean the programmes swap order, which an "
+                           "amplitude plot hides.")
+            sections.append(dict(id="factor-order", title="Order and end-to-end change",
+                                 svgs=svgs, bullets=b))
+
     fact = _safe("variance partition", _factorial, run, prog, fd)
     if fact and fact.get("summary") is not None:
         r = _safe("factor figure", fig_factors, fact["summary"], fact["terms"], fact["F"],
@@ -260,6 +289,61 @@ def run_reading(stats, stats_path, rule, manifest=None, go_res=None, go_long=Non
         if r:
             sections.append(dict(id="factors", title="What drives the response",
                                  svgs=r[0], bullets=fact["bullets"]))
+        v = _safe("variance violins", fig_variance_violins, fact["S"], fact.get("S_ref"),
+                  fact["terms"], fact["source"])
+        if v:
+            svgs, f = v
+            b = ["One pair of half-violins per design term: the distribution over the proteins "
+                 "that the median bars above summarise."]
+            if f["n_ref"]:
+                md = f["medians"]
+                gain = sorted(((t, ms - mr) for t, (ms, mr) in md.items()
+                               if t not in ("replicates", "higher-order")), key=lambda x: -x[1])
+                b.append(f"Background = all {f['n_ref']} quantified proteins without missing "
+                         "value. The selected proteins were picked on differences between "
+                         "conditions, so a factor matters where its share exceeds the background.")
+                up = [f"{html.escape(t)} ({md[t][0] * 100:.0f} % vs {md[t][1] * 100:.0f} %)"
+                      for t, g in gain if g >= 0.05][:3]
+                b.append(("Above the background (median): " + ", ".join(up) + ".") if up else
+                         "No design term exceeds the background by 5 points (median).")
+                if "replicates" in md:
+                    ms, mr = md["replicates"]
+                    b.append(f"Replicate noise: {ms * 100:.0f} % of the variance of a selected "
+                             f"protein, {mr * 100:.0f} % of a background protein (median).")
+            sections.append(dict(id="variance-violins", title="Variance shares per protein",
+                                 svgs=svgs, bullets=b))
+
+    r = _safe("dynamic range", fig_dynamic_range, run, prog)
+    if r:
+        svg, f = r
+        b = [f"{f['n']} proteins over {f['orders']:.1f} orders of magnitude "
+             f"({f['range_log2']:.1f} log2).",
+             f"{f['frac'] * 100:.0f} % of the proteins are differential somewhere; "
+             f"{f['top_decile'] * 100:.0f} % in the most abundant tenth and "
+             f"{f['bottom_decile'] * 100:.0f} % in the least abundant tenth."]
+        if f["frac"] > 0 and f["top_decile"] > 2.5 * max(f["bottom_decile"], 1e-9):
+            b.append("The differential proteins sit mostly at the abundant end: part of the "
+                     "signal is detectability, not biology.")
+        sections.append(dict(id="dynamic-range", title="Dynamic range", svgs=[svg], bullets=b))
+
+    r = _safe("term treemap", fig_go_treemap, run, groups)
+    tree = _safe("term tree", fig_term_tree, run, groups, jaccard)
+    if r or tree:
+        svgs = [x[0] for x in (r, tree) if x]
+        b = []
+        if r:
+            f = r[1]
+            b.append(f"{f['n_terms']} enriched terms, each tile sized by its −log10(q) and "
+                     f"coloured by its Meta-GO group ({f['n_groups']} groups shown).")
+            th, nm, share = f["largest"]
+            b.append(f"Largest block: G{th + 1} · {html.escape(nm)}, {share * 100:.0f} % of the "
+                     "total area — its terms share most of their proteins, so that area is one "
+                     "piece of evidence, not many.")
+        if tree:
+            b.append(f"The tree below is the one the groups come from: terms joined by "
+                     f"1 − Jaccard on their proteins, average linkage, cut at {jaccard:g}.")
+        sections.append(dict(id="go-terms", title="Enriched terms and their redundancy",
+                             svgs=svgs, bullets=b))
 
     r = _safe("functional groups", fig_groups, run, groups)
     if r:
@@ -306,6 +390,66 @@ def run_reading(stats, stats_path, rule, manifest=None, go_res=None, go_long=Non
             sections.append(dict(id=f"volcano{i}", title=f"Volcano · {f['contrast']}", svgs=svgs,
                                  bullets=b))
 
+    P = _safe("contrast pairs", fc_pairs, run) if len(run.contrasts) >= 2 else None
+    if P is not None and not P.empty:
+        r = _safe("FC vs FC", fig_fc_vs_fc, run, P, prog)
+        if r:
+            svgs, f = r
+            b = ["log2FC against log2FC: a protein away from the diagonal responds to one "
+                 "contrast more than to the other."]
+            best = f["best"]
+            if best is not None and best.shared >= 5 and best.slope == best.slope:
+                sl = float(best.slope)
+                b.append(f"{run.short(best.contrast_y)} against {run.short(best.contrast_x)}: "
+                         f"{best.shared} shared DEP, major-axis slope {sl:+.2f}"
+                         + (" — same amplitude." if 0.8 <= abs(sl) <= 1.25 else
+                            " — the y contrast moves them less." if abs(sl) < 0.8 else
+                            " — the y contrast moves them further."))
+                b.append(f"{best.up_up + best.down_down} of the shared DEP move the same way, "
+                         f"{best.up_down + best.down_up} the opposite way.")
+            elif best is not None:
+                b.append(f"The widest pair shares {best.shared} DEP, too few for a slope: "
+                         "the contrasts hit different proteins.")
+            b.append("The slope is fitted on the shared DEP only. On the union, proteins "
+                     "significant in one contrast alone form a cross along the axes and pull "
+                     "the slope towards that axis.")
+            if f["n_pairs"] > len(f["picked"]):
+                b.append(f"{f['n_pairs']} pairs in all (sheet FC_vs_FC); the matrix shows every "
+                         f"pair, the scatters the {len(f['picked'])} sharing the most DEP.")
+            sections.append(dict(id="fc-vs-fc", title="Shared and divergent responses",
+                                 svgs=svgs, bullets=b))
+
+    r = _safe("radar", fig_radar, run, prog, design, fd["F"] if fd else None)
+    if r:
+        svg, f = r
+        sections.append(dict(
+            id="radar", title="Shape of each programme",
+            svgs=[svg],
+            bullets=[f"The {f['k']} programmes drawn over the {f['n_cond']} conditions on one "
+                     "common z scale: the shape says where each one is high and where it is "
+                     "flat.",
+                     "Only drawn for a design with at most eight conditions; beyond that the "
+                     "programme profiles above read better."]))
+
+    pg = _safe("programmes and groups", fig_programme_groups, run, prog, groups)
+    if pg:
+        svg, f = pg
+        p_, g_, k_, q_ = f["best"]
+        b = [f"{f['n_links']} programme–group pairs sharing at least two proteins, "
+             f"{f['n_sig']} more than expected by chance.",
+             f"Strongest link: P{p_} with {html.escape(g_)} ({k_} proteins, q {q_:.1g})."]
+        multi = (f["table"][f["table"].q < 0.05].groupby("group").programme.nunique())
+        spread = [g for g, n in multi.items() if n > 1]
+        if spread:
+            b.append("Tied to more than one programme: "
+                     + "; ".join(html.escape(str(g)) for g in spread[:3])
+                     + " — the clustering does not split them.")
+        sections.append(dict(id="programme-groups", title="Programmes and functional groups",
+                             svgs=[svg], bullets=b))
+        prog_groups = f["table"]
+    else:
+        prog_groups = None
+
     r = _safe("spotlight", fig_spotlight, run, design, prog)
     if r:
         svgs, f = r
@@ -349,7 +493,7 @@ def run_reading(stats, stats_path, rule, manifest=None, go_res=None, go_long=Non
                                    "'higher-order' = what condition means add; 'replicates' = "
                                    "within-condition residual")
     tables = _safe("tables", reading_tables, run, design, prog, groups, sections, kpis,
-                   fact) or {}
+                   fact, P, prog_groups) or {}
     return {"sections": sections, "kpis": kpis, "meta": meta, "tables": tables,
             "rule_text": run.rule_text(),
             "prog": prog, "groups": groups, "design": design, "design_text": kind, "run": run}

@@ -10,6 +10,76 @@
   colours. SVG / PNG exports follow the theme on screen (same maps written into the copy).
   The choice is stored in `localStorage` (ignored when the browser blocks it).
 - Test: every grey used by a figure must have a day equivalent.
+- **Variance shares per protein** (2026-11-10, figure audit, batch 1): split violins under
+  *What drives the response*, one pair per design term. Right half = selected proteins,
+  left half = all quantified proteins without missing value (background). The selected
+  proteins were picked on between-condition differences, which inflates their factor
+  shares: a factor is read by its excess over the background. Densities are bounded to
+  [0, 1] (reflection); each half is scaled to its own maximum. New sheets
+  `Variance_quantiles` (quartiles per set and term) and `Variance_shares` (shares of every
+  quantified protein).
+- **Shared and divergent responses** (2026-11-10, figure audit, batch 1): log2FC against
+  log2FC. A matrix of every pair of contrasts (3 or more) coloured by the standardised
+  major-axis slope on the shared DEP, then a scatter for each of the 3 pairs sharing the
+  most DEP (status of each protein, quadrant counts, sign concordance, fit drawn over the
+  span of the shared DEP only). The slope is fitted on the shared DEP alone: on the union,
+  proteins significant in one contrast only form a cross along the axes and pull the slope
+  towards it. Same rule as the FC vs FC page of the Deimos dashboard. New sheet `FC_vs_FC`
+  (one row per pair).
+- **Enriched terms and their redundancy** (2026-11-10, figure audit, batch 1), before the
+  functional groups: a squarified treemap of the enriched terms (area = −log10 q, colour =
+  Meta-GO group, each group outlined and named) and, under it, the redundancy tree itself —
+  terms joined by 1 − Jaccard on their proteins, average linkage, with the `--jaccard` cut
+  drawn. Cutting that tree is what defines the groups, so the pair shows how much of an
+  enrichment is one redundant block rather than independent evidence. No new dependency:
+  the layout is `_squarify` (Bruls 2000) in numpy and the tree reuses
+  `axis_meta_go._jaccard_condensed`.
+- **Order and end-to-end change** (2026-11-10, figure audit, batch 1), for factorial
+  designs, before *What drives the response*: a slope graph of the proteins moving most
+  between the end levels of the ordered factor (mean log2 abundance over the conditions
+  sharing the level, labels spread by isotonic regression with leader lines), and a bump
+  chart of the programmes ranked by median z at each level, one panel per level of the
+  lines factor. Crossing lines mean the programmes swap order, which an amplitude plot
+  hides.
+- **Dynamic range** (2026-11-10, figure audit, batch 1), before the enriched terms: the
+  proteins ranked by mean log2 abundance with the DEP marked, and a strip giving the share
+  of DEP in each decile of abundance. It answers whether the differential proteins are
+  simply the abundant ones; the reading bullet says so when the top decile holds more than
+  2.5× the share of the bottom one.
+- **Programmes and functional groups** (2026-11-10, figure audit, batch 1), after the
+  volcanos: bipartite graph of the proteins shared by each response programme and each
+  Meta-GO group, line width = proteins in common, solid when more than expected
+  (hypergeometric, BH over the whole table). A group tied to several programmes is one the
+  clustering does not split. New sheet `Programme_groups` and a new public
+  `programmes.theme_overlaps()` (the long table behind the existing `_theme_enrichment`,
+  which is unchanged).
+- **Shape of each programme** (2026-11-10, figure audit, batch 1): radar, one spoke per
+  condition in design order, one polygon per programme, radii = median z on one common
+  scale with the z = 0 ring drawn. Only for a design with 3 to 8 conditions; beyond that
+  the programme profiles read better and the figure is skipped.
+
+### Fixed
+- **The whole *Biological reading* tab vanished on Python 3.11** (`SyntaxError:
+  unterminated string literal`, `reading/svg.py`): the dynamic-range figure used an
+  f-string whose expression spanned two source lines, which only became legal in 3.12
+  (PEP 701). Written on a 3.13 machine, the module would not parse on 3.11, so the
+  import of `reading.run` failed and the tab was dropped — with the reason only in
+  `pathfinder_log.txt`. `tests/test_reading.py` now compiles every module with the
+  oldest interpreter available on the machine, so a 3.12-only construct fails the
+  suite instead of reaching a user.
+- **A failed biological reading now says so in the report.** The tab used to vanish
+  entirely, leaving the reason in `pathfinder_log.txt` only. It is now kept and carries
+  a red banner naming the exception, stating that the rest of the report is unaffected,
+  and pointing at `PATHFINDER_DEBUG=1` for the traceback; an `ImportError` or
+  `SyntaxError` additionally says to check that the whole `reading/` folder matches
+  `pathfinder.py`. New `red` theme variable so the banner reads in both themes.
+- Biological reading skipped without a clear reason: when the `reading/` package is not
+  next to `pathfinder.py` (an install updated file by file), the import failed and the
+  whole *Biological reading* tab disappeared with only a generic ImportError. The
+  message now names the missing folder and says to copy all of `reading/`.
+- Day theme: the edges of the functional-group network (`#57606a`) had no day equivalent and
+  stayed dark on white. Added to `LIGHT_SWAP` (the invariant test only caught it on a run
+  whose groups are linked).
 
 ### Changed
 - Factor profiles: the reference level is called the *neutral line* (white at night, black

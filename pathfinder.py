@@ -454,7 +454,15 @@ def main(argv=None):
     reading = None
     if not args.no_reading:
         try:
-            from reading.run import run_reading
+            try:
+                from reading.run import run_reading
+            except ImportError as e:                 # dossier reading/ absent de l'install
+                here = os.path.dirname(os.path.abspath(__file__))
+                raise ImportError(
+                    f"{e} — the 'reading' package is missing next to pathfinder.py "
+                    f"({os.path.join(here, 'reading')}). Copy the whole reading/ folder, "
+                    "not just pathfinder.py, or pass --no-reading to silence this."
+                ) from None
             ov = {}
             if args.order_regex:
                 ov["order_regex"] = args.order_regex
@@ -473,7 +481,10 @@ def main(argv=None):
             if os.environ.get("PATHFINDER_DEBUG"):
                 import traceback
                 traceback.print_exc()
-        if reading is not None:
+            # Keep the tab and let it carry a banner: a report missing a whole
+            # section has to say so itself, not hide it in a log nobody opens.
+            reading = {"error": f"{type(e).__name__}: {e}"}
+        if reading is not None and not reading.get("error"):
             provenance.update(reading["meta"])
             n_fig = sum(len(s["svgs"]) for s in reading["sections"])
             print(f"[Pathfinder] Biological reading: {len(reading['sections'])} sections, "
