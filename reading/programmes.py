@@ -158,6 +158,38 @@ def programme_stability(run, prog, n_boot=50, seed=None):
     return prog
 
 
+def theme_overlaps(lab, themes, min_overlap=2):
+    """Long table programme x functional group: shared proteins, expected number under
+    independence, hypergeometric p and BH q over the whole table. Same universe and same
+    test as `_theme_enrichment`, which keeps only the best few per programme."""
+    from scipy.stats import hypergeom
+    universe = set(lab.index)
+    tg = {t: themes.genes(t) & universe for t in themes.names}
+    tg = {t: g for t, g in tg.items() if len(g) >= 3}
+    annotated = set().union(*tg.values()) if tg else set()
+    if not annotated:
+        return pd.DataFrame()
+    N = len(annotated)
+    rows = []
+    for p in sorted(lab.unique()):
+        members = set(lab.index[lab == p]) & annotated
+        n = len(members)
+        for t, g in tg.items():
+            k_ = len(g & members)
+            if k_ >= min_overlap:
+                rows.append(dict(programme=int(p), theme=int(t), group=themes.names[t],
+                                 shared=k_, n_programme=n, n_group=len(g),
+                                 expected=round(n * len(g) / N, 2) if N else np.nan,
+                                 p=float(hypergeom.sf(k_ - 1, N, len(g), n))))
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows).sort_values("p").reset_index(drop=True)
+    m = len(df)
+    df["q"] = np.minimum.accumulate(
+        (df.p.values * m / (np.arange(m) + 1))[::-1])[::-1].clip(0, 1)
+    return df
+
+
 def _theme_enrichment(lab, themes, max_themes=3):
     """Functional groups over-represented in each programme (hypergeometric + BH)."""
     from scipy.stats import hypergeom

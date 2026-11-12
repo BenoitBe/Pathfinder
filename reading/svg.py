@@ -16,8 +16,8 @@ import re
 import numpy as np
 import pandas as pd
 
-from build_report_html import (BG, COND_PALETTE, DOWN, FG, GRID, MUT, PANEL, UP,  # noqa: F401
-                               _diverging)
+from build_report_html import (AMBER, BG, BLUE, COND_PALETTE, DOWN, FG, GREEN, GRID, MUT,  # noqa: F401
+                               PANEL, PURP, UP, _diverging)
 
 FONT = "-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif"
 WHITE = "#ffffff"
@@ -905,6 +905,192 @@ def fig_groups(run, groups, n_groups=16):
 
 # --------------------------------------------------------------------------- 5. volcanos
 
+def _squarify(values, x, y, w, h):
+    """Squarified treemap (Bruls, Huizing & van Wijk 2000): rectangles close to square,
+    laid out in decreasing area. values must be sorted descending and sum > 0."""
+    out = []
+    v = list(values)
+    total = float(sum(v)) or 1.0
+    scale = (w * h) / total
+    i = 0
+    while i < len(v):
+        if w <= 0 or h <= 0:
+            out += [(x, y, 0.0, 0.0)] * (len(v) - i)
+            break
+        short = min(w, h)
+        row, rsum, best = [], 0.0, None
+        j = i
+        while j < len(v):
+            a = v[j] * scale
+            t = rsum + a
+            side = t / short
+            worst = max(max(side / (q / side) if q else 1e9, (q / side) / side if side else 1e9)
+                        for q in [c * scale for c in row + [v[j]]])
+            if best is not None and worst > best:
+                break
+            row.append(v[j]); rsum = t; best = worst; j += 1
+        side = rsum / short if short else 0.0
+        cx, cy = x, y
+        for a in (c * scale for c in row):
+            L = a / side if side else 0.0
+            if w >= h:
+                out.append((cx, cy, side, L)); cy += L
+            else:
+                out.append((cx, cy, L, side)); cx += L
+        if w >= h:
+            x += side; w -= side
+        else:
+            y += side; h -= side
+        i = j
+    return out
+
+
+def _group_palette(themes):
+    return {t: CAT[i % len(CAT)] for i, t in enumerate(themes)}
+
+
+def fig_go_treemap(run, groups, n_groups=12, max_terms=90):
+    """Every enriched term as a tile: area = -log10(q), colour = Meta-GO group. Shows how
+    much of the enrichment is one redundant block and how much is spread over groups."""
+    if groups is None or groups.terms.empty:
+        return None
+    keep = groups.top(n_groups, min_terms=1)
+    T = groups.terms[groups.terms.theme.isin(keep)].copy()
+    if T.empty:
+        return None
+    T["w"] = -np.log10(T.p.astype(float).clip(lower=1e-300))
+    T = T[T.w > 0]
+    if T.empty:
+        return None
+    T = T.sort_values("w", ascending=False).head(max_terms)
+    cols = _group_palette(keep)
+    blocks = (T.groupby("theme").agg(w=("w", "sum"), n=("term", "size"))
+              .sort_values("w", ascending=False))
+    W, H = 820, 572
+    left, top = 14, 96
+    bw, bh = W - 2 * left, H - top - 54
+    qmax = float(T.w.max())
+    s = [svg_open(W, H, "Enriched terms"),
+         title_block(14, 20, "Enriched terms, sized by evidence",
+                     f"{len(T)} terms in {len(blocks)} Meta-GO groups · area = −log10(q) of the "
+                     f"term · colour = group · hover a tile"
+                     + (f" · {len(groups.terms) - len(T)} weaker terms left out"
+                        if len(groups.terms) > len(T) else ""))]
+    for i, t in enumerate(blocks.index[:6]):
+        x = 14 + (i % 3) * 266
+        y = 56 + (i // 3) * 16
+        s.append(_legend_item(x, y, cols[t], _short(f"G{t + 1} · {groups.names[t]}", 36),
+                              shape="rect"))
+    rects = _squarify(list(blocks.w), left, top, bw, bh)
+    for (gx, gy, gw, gh), t in zip(rects, blocks.index):
+        sub = T[T.theme == t].sort_values("w", ascending=False)
+        inner = _squarify(list(sub.w), gx + 1, gy + 1, max(gw - 2, 0), max(gh - 2, 0))
+        col = cols[t]
+        for (tx, ty, tw, th), r in zip(inner, sub.itertuples()):
+            op = 0.45 + 0.5 * (r.w / qmax if qmax else 1)
+            tip = (f"{r.name}\n{r.term} · {r.source}\nq {_p(r.p)} · {len(r.genes)} proteins\n"
+                   f"group G{t + 1}: {groups.names[t]}")
+            s.append(f"<rect class='pt' x='{_n(tx)}' y='{_n(ty)}' width='{_n(max(tw - 1, 0))}' "
+                     f"height='{_n(max(th - 1, 0))}' fill='{col}' fill-opacity='{op:.2f}' "
+                     f"rx='1.5'><title>{_esc(tip)}</title></rect>")
+            if tw > 54 and th > 15:
+                s.append(f"<text x='{_n(tx + 4)}' y='{_n(ty + 11)}' fill='{BG}' font-size='9' "
+                         f"pointer-events='none'>"
+                         f"{_esc(_short(str(r.name), int((tw - 8) / 5.0)))}</text>")
+        s.append(f"<rect x='{_n(gx)}' y='{_n(gy)}' width='{_n(gw)}' height='{_n(gh)}' "
+                 f"fill='none' stroke='{BG}' stroke-width='2'/>")
+        if gw > 70 and gh > 26:
+            s.append(f"<text x='{_n(gx + 4)}' y='{_n(gy + gh - 5)}' fill='{WHITE}' "
+                     f"font-size='9.5' font-weight='bold' pointer-events='none' "
+                     f"paint-order='stroke' stroke='{BG}' stroke-width='2.5'>"
+                     f"G{t + 1}<title>{_esc(groups.names[t])}</title></text>")
+    s.append(f"<text x='{_n(left)}' y='{_n(H - 12)}' fill='{MUT}' font-size='9.5'>"
+             + _esc("A group covering a large area is one redundant block of terms, not "
+                    "independent evidence: its terms share most of their proteins.")
+             + "</text>")
+    s.append("</svg>")
+    big = blocks.index[0]
+    return "".join(s), {"n_terms": int(len(T)), "n_groups": int(len(blocks)),
+                        "largest": (int(big), groups.names[big], float(blocks.w.iloc[0] /
+                                                                      blocks.w.sum()))}
+
+
+def fig_term_tree(run, groups, jaccard_cut=0.5, max_terms=60):
+    """The redundancy tree itself: terms joined by how many proteins they share (Jaccard,
+    average linkage). Cutting it at `jaccard_cut` is what defines the Meta-GO groups."""
+    from scipy.cluster.hierarchy import dendrogram, linkage
+    from axis_meta_go import _jaccard_condensed
+    if groups is None or len(groups.terms) < 3:
+        return None
+    T = groups.terms.sort_values("p").head(max_terms).reset_index(drop=True)
+    if len(T) < 3:
+        return None
+    sets = list(T.genes)
+    Z = linkage(_jaccard_condensed(sets), method="average")
+    dd = dendrogram(Z, no_plot=True)
+    order = dd["leaves"]
+    cols = _group_palette(groups.top(12, min_terms=1))
+    lab_w = min(330, max(140, max(_tw(_short(str(n), 44), 9.5) for n in T.name) + 10))
+    rowh = 15 if len(T) <= 44 else 11
+    left, top = 56, 86
+    plot_w = 300
+    sub = (f"{len(T)} strongest terms · distance = 1 − Jaccard on the proteins, average "
+           f"linkage · the dashed cut at {jaccard_cut:g} makes the Meta-GO groups"
+           + (f" · {len(groups.terms) - len(T)} weaker terms left out"
+              if len(groups.terms) > len(T) else ""))
+    W = max(left + plot_w + lab_w + 30, int(_tw(sub, 11)) + 40)
+    H = top + rowh * len(T) + 64
+    dmax = max(1e-9, float(Z[:, 2].max()))
+    ax_x = lambda d: left + plot_w * (1 - min(d / dmax, 1.0))          # root left, leaves right
+    ypos = {leaf: top + rowh * i + rowh / 2 for i, leaf in enumerate(order)}
+    s = [svg_open(W, H, "Term redundancy tree"),
+         title_block(14, 20, "How the terms overlap", sub)]
+    for d in (0, 0.25, 0.5, 0.75, 1.0):
+        if d > dmax * 1.001:
+            continue
+        x = ax_x(d)
+        s.append(f"<line x1='{_n(x)}' y1='{_n(top - 6)}' x2='{_n(x)}' y2='{_n(top + rowh * len(T))}' "
+                 f"stroke='{GRID}' stroke-width='0.5'/>"
+                 f"<text x='{_n(x)}' y='{_n(top - 10)}' fill='{MUT}' font-size='9' "
+                 f"text-anchor='middle'>{d:g}</text>")
+    xc = ax_x(jaccard_cut)
+    s.append(f"<line x1='{_n(xc)}' y1='{_n(top - 6)}' x2='{_n(xc)}' "
+             f"y2='{_n(top + rowh * len(T))}' stroke='{MUT}' stroke-dasharray='4 3' "
+             f"stroke-width='1'/><text x='{_n(xc)}' y='{_n(top + rowh * len(T) + 14)}' "
+             f"fill='{MUT}' font-size='9' text-anchor='middle'>cut {jaccard_cut:g}</text>")
+    n = len(T)
+    node_y, node_x = {}, {}
+    for i, leaf in enumerate(order):
+        node_y[leaf] = ypos[leaf]
+        node_x[leaf] = ax_x(0.0)
+    for k, (a, b, d, _) in enumerate(Z):
+        a, b, idx = int(a), int(b), n + k
+        ya, yb = node_y[a], node_y[b]
+        x, xa, xb = ax_x(d), node_x[a], node_x[b]
+        col = MUT if d > jaccard_cut else FG
+        s.append(f"<path d='M{_n(xa)} {_n(ya)}H{_n(x)}V{_n(yb)}H{_n(xb)}' fill='none' "
+                 f"stroke='{col}' stroke-width='{1.2 if d <= jaccard_cut else 0.8}'/>")
+        node_y[idx], node_x[idx] = (ya + yb) / 2, x
+    for i, leaf in enumerate(order):
+        r = T.iloc[leaf]
+        y = ypos[leaf]
+        col = cols.get(int(r.theme), MUT)
+        tip = (f"{r['name']}\n{r.term} · {r.source}\nq {_p(r.p)} · {len(r.genes)} proteins\n"
+               f"group G{int(r.theme) + 1}: {groups.names[int(r.theme)]}"
+               + ("  (representative)" if bool(r.rep) else ""))
+        s.append(f"<circle class='pt' cx='{_n(ax_x(0.0))}' cy='{_n(y)}' r='3.4' fill='{col}' "
+                 f"stroke='{BG}' stroke-width='0.6'><title>{_esc(tip)}</title></circle>")
+        s.append(f"<text x='{_n(ax_x(0.0) + 8)}' y='{_n(y + 3.2)}' fill='{FG if r.rep else MUT}' "
+                 f"font-size='{9.5 if rowh >= 15 else 8.5}'>"
+                 f"{_esc(_short(str(r['name']), 44))}<title>{_esc(tip)}</title></text>")
+    s.append(f"<text x='14' y='{_n(H - 12)}' fill='{MUT}' font-size='9.5'>"
+             + _esc("Named in full = representative of its group. Branches joining left of "
+                    "the cut are one group; the colour repeats the group colours above.")
+             + "</text>")
+    s.append("</svg>")
+    return "".join(s), {"n_terms": int(len(T)), "max_d": float(dmax)}
+
+
 def fig_volcano(run, c, groups, prog=None, idx=1):
     from .labels import informative
     de = run.de
@@ -1027,6 +1213,541 @@ def fig_volcano(run, c, groups, prog=None, idx=1):
     facts = {"contrast": run.short(c), "up": int(up.sum()), "down": int(dn.sum()),
              "up_names": up_names, "down_names": dn_names, "groups": [g[1] for g in grp]}
     return ["".join(sv)], facts
+
+
+# --------------------------------------------------------------------------- 5b. FC vs FC
+
+def _major_axis(x, y):
+    """Standardised major-axis slope (both axes carry error, so least squares on y would
+    be biased towards 0). Returns None below 5 points or without covariance."""
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    if len(x) < 5:
+        return None
+    a, b = x - x.mean(), y - y.mean()
+    sxx, syy, sxy = float(a @ a), float(b @ b), float(a @ b)
+    if abs(sxy) < 1e-12:
+        return None
+    return (syy - sxx + np.sqrt((syy - sxx) ** 2 + 4 * sxy ** 2)) / (2 * sxy)
+
+
+def _pearson(x, y):
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    if len(x) < 3 or x.std() == 0 or y.std() == 0:
+        return None
+    return float(np.corrcoef(x, y)[0, 1])
+
+
+def fc_pairs(run, min_shared=5):
+    """One row per ordered pair of contrasts: counts, shared DEP, major-axis slope on the
+    shared DEP only, sign concordance. On the union the DEP of a single contrast form a
+    cross along the axes and pull the slope, hence the restriction to the shared ones."""
+    cs = [c for c in run.contrasts if c + "_diff" in run.de.columns]
+    if len(cs) < 2:
+        return pd.DataFrame()
+    lfc = {c: run.de[c + "_diff"].astype(float) for c in cs}
+    sig = {c: run.sig(c).fillna(False) & lfc[c].notna() for c in cs}
+    rows = []
+    for i, cx in enumerate(cs):
+        for cy in cs[i + 1:]:
+            ok = lfc[cx].notna() & lfc[cy].notna()
+            sx, sy = sig[cx] & ok, sig[cy] & ok
+            both = sx & sy
+            x, y = lfc[cx][both].to_numpy(), lfc[cy][both].to_numpy()
+            sl = _major_axis(x, y) if both.sum() >= min_shared else None
+            either = (sx | sy) & ok
+            conc = float((lfc[cx][either] * lfc[cy][either] > 0).mean()) if either.any() else np.nan
+            rows.append(dict(
+                contrast_x=cx, contrast_y=cy, n_tested=int(ok.sum()),
+                dep_x=int(sx.sum()), dep_y=int(sy.sum()), shared=int(both.sum()),
+                jaccard=round(float(both.sum() / either.sum()), 3) if either.any() else np.nan,
+                slope=round(float(sl), 3) if sl is not None else np.nan,
+                r_shared=round(v, 3) if (v := _pearson(x, y)) is not None else np.nan,
+                sign_concordance=round(conc, 3) if conc == conc else np.nan,
+                up_up=int(((x > 0) & (y > 0)).sum()), down_down=int(((x < 0) & (y < 0)).sum()),
+                up_down=int(((x > 0) & (y < 0)).sum()), down_up=int(((x < 0) & (y > 0)).sum())))
+    return pd.DataFrame(rows)
+
+
+NO_SLOPE = "#1c2128"          # too few shared DEP (same grey as the missing cells)
+
+
+def _slope_colour(sl):
+    """Slope -> colour on log2 scale around 1 (equal amplitude = grey); negative = blue."""
+    if sl is None or sl != sl:
+        return NO_SLOPE
+    if sl <= 0:
+        return _diverging(-1.6, 2.0)
+    return _diverging(float(np.clip(np.log2(sl), -2, 2)), 2.0)
+
+
+def _short_mid(text, n):
+    """Truncate in the MIDDLE. Contrast names share a long prefix (T10_Dark_OMP_like...),
+    so cutting the tail leaves rows that all read alike."""
+    t = str(text)
+    if len(t) <= n or n < 5:
+        return _short(t, n)
+    head = (n - 1) * 2 // 3
+    return t[:head] + "…" + t[len(t) - (n - 1 - head):]
+
+
+def fig_fc_matrix(run, P, uid="fcm"):
+    """Every pair of contrasts at a glance: colour = major-axis slope on the shared DEP,
+    number = how many DEP the two contrasts share."""
+    cs = [c for c in run.contrasts if c + "_diff" in run.de.columns]
+    n = len(cs)
+    if n < 3 or P is None or P.empty:
+        return None
+    cell = max(26, min(46, int(520 / n)))
+    nchar = 44
+    lab = min(270, max(70, int(max((_tw(_short_mid(run.short(c), nchar), 10) for c in cs),
+                                   default=80))))
+    nchar = max(12, int(lab / 5.1))
+    left, top = lab + 16, 96
+    W, H = left + cell * n + 150, top + cell * n + max(96, lab + 30)
+    K = {(r.contrast_x, r.contrast_y): r for r in P.itertuples()}
+    s = [svg_open(W, H, "Contrast pairs"),
+         title_block(14, 20, "How the contrasts relate to one another",
+                     f"{n} contrasts · colour = major-axis slope on the shared DEP "
+                     "(grey = fewer than 5 shared) · number = shared DEP · hover a cell")]
+    zlab = "log2 slope (y vs x)"
+    s.append(zbar(14, 65, 2.0, uid, zlab, width=150))
+    sx = 14 + 150 + 8 + _tw(zlab, 9) + 18
+    s.append(f"<rect x='{_n(sx)}' y='{_n(65)}' width='10' height='9' rx='2' fill='{NO_SLOPE}' "
+             f"stroke='{GRID}' stroke-width='0.6'/><text x='{_n(sx + 15)}' y='{_n(74)}' "
+             f"fill='{MUT}' font-size='9'>fewer than 5 shared DEP</text>")
+    for i, c in enumerate(cs):
+        y = top + cell * i + cell / 2
+        s.append(f"<text x='{_n(left - 6)}' y='{_n(y + 3.5)}' fill='{FG}' font-size='10' "
+                 f"text-anchor='end'>{_esc(_short_mid(run.short(c), nchar))}"
+                 f"<title>{_esc(run.short(c))}</title></text>")
+        x = left + cell * i + cell / 2
+        s.append(f"<g transform='rotate(-45 {_n(x)} {_n(top + cell * n + 8)})'>"
+                 f"<text x='{_n(x)}' y='{_n(top + cell * n + 8)}' fill='{FG}' font-size='10' "
+                 f"text-anchor='end'>{_esc(_short_mid(run.short(c), nchar))}"
+                 f"<title>{_esc(run.short(c))}</title></text></g>")
+    for i, cy in enumerate(cs):
+        for j, cx in enumerate(cs):
+            x, y = left + cell * j, top + cell * i
+            if i == j:
+                s.append(f"<rect x='{_n(x)}' y='{_n(y)}' width='{cell}' height='{cell}' "
+                         f"fill='{GRID}' stroke='{BG}' stroke-width='1'/>")
+                continue
+            r = K.get((cx, cy)) or K.get((cy, cx))
+            if r is None:
+                continue
+            flip = (cx, cy) not in K                       # stored the other way round
+            sl = r.slope if r.slope == r.slope else None
+            if sl is not None and flip and abs(sl) > 1e-9:
+                sl = 1.0 / sl
+            tip = [f"{run.short(cy)} (y) vs {run.short(cx)} (x)",
+                   f"{r.shared} shared DEP · {r.dep_y if not flip else r.dep_x} / "
+                   f"{r.dep_x if not flip else r.dep_y} DEP · Jaccard {r.jaccard:.2f}"]
+            if sl is not None:
+                tip.append(f"major-axis slope {sl:+.2f}"
+                           + (" — similar amplitude" if 0.8 <= abs(sl) <= 1.25 else
+                              " — weaker in y" if abs(sl) < 0.8 else " — stronger in y"))
+                tip.append(f"r {r.r_shared:+.2f} · {r.up_up + r.down_down} same, "
+                           f"{r.up_down + r.down_up} opposite sign")
+            else:
+                tip.append("too few shared DEP for a slope")
+            if r.sign_concordance == r.sign_concordance:
+                tip.append(f"sign concordance over the union {r.sign_concordance * 100:.0f} %")
+            s.append(f"<rect class='pt' x='{_n(x)}' y='{_n(y)}' width='{cell}' height='{cell}' "
+                     f"fill='{_slope_colour(sl)}' stroke='{BG}' stroke-width='1'>"
+                     f"<title>{_esc(chr(10).join(tip))}</title></rect>")
+            if cell >= 30 and r.shared:
+                s.append(f"<text x='{_n(x + cell / 2)}' y='{_n(y + cell / 2 + 3.5)}' "
+                         f"fill='{WHITE if sl is not None else MUT}' font-size='9' "
+                         f"text-anchor='middle' pointer-events='none'>{r.shared}</text>")
+    s.append(f"<text x='{_n(left)}' y='{_n(H - 10)}' fill='{MUT}' font-size='9.5'>"
+             + _esc("Read row against column: a slope above 1 means the row contrast moves the "
+                    "shared proteins further than the column one.") + "</text>")
+    s.append("</svg>")
+    return "".join(s)
+
+
+def fig_fc_scatter(run, r, prog=None, idx=1):
+    """log2FC against log2FC for one pair: status of each protein, quadrant counts and the
+    major-axis fit on the shared DEP."""
+    from .labels import informative
+    cx, cy = r.contrast_x, r.contrast_y
+    de = run.de
+    X0, Y0 = de[cx + "_diff"].astype(float), de[cy + "_diff"].astype(float)
+    ok = X0.notna() & Y0.notna()
+    sx, sy = run.sig(cx).fillna(False) & ok, run.sig(cy).fillna(False) & ok
+    both, only_x, only_y = sx & sy, sx & ~sy, sy & ~sx
+    ns = ok & ~sx & ~sy
+    m = float(max(np.nanmax(np.abs(X0[ok | sx].values)) if ok.any() else 1,
+                  np.nanmax(np.abs(Y0[ok].values)) if ok.any() else 1)) * 1.08 or 1.0
+    W, H = 800, 660
+    ax = Ax(74, 92, 600, 460, (-m, m), (-m, m))
+    sl = _major_axis(X0[both].values, Y0[both].values) if both.sum() >= 5 else None
+    sub = (f"{int(both.sum())} DEP in both · {int(only_x.sum())} in x only · "
+           f"{int(only_y.sum())} in y only"
+           + (f" · slope {sl:+.2f} on the shared DEP" if sl is not None else ""))
+    s = [svg_open(W, H, f"{run.short(cy)} against {run.short(cx)}"),
+         title_block(14, 20,
+                     f"{_short_mid(run.short(cy), 34)} against {_short_mid(run.short(cx), 34)}",
+                     sub + " · dashed diagonal = identical response"),
+         ax.frame(f"log2FC · {_short_mid(run.short(cx), 52)}",
+                  f"log2FC · {_short_mid(run.short(cy), 52)}")]
+    for v in (0,):
+        s.append(f"<line x1='{_n(ax.X(v))}' y1='{ax.y0}' x2='{_n(ax.X(v))}' "
+                 f"y2='{ax.y0 + ax.h}' stroke='{MUT}' stroke-width='0.8'/>"
+                 f"<line x1='{ax.x0}' y1='{_n(ax.Y(v))}' x2='{ax.x0 + ax.w}' "
+                 f"y2='{_n(ax.Y(v))}' stroke='{MUT}' stroke-width='0.8'/>")
+    for v in (run.lfc_min, -run.lfc_min):
+        if v:
+            s.append(f"<line x1='{_n(ax.X(v))}' y1='{ax.y0}' x2='{_n(ax.X(v))}' "
+                     f"y2='{ax.y0 + ax.h}' stroke='{GRID}' stroke-dasharray='3 3' "
+                     f"stroke-width='0.7'/><line x1='{ax.x0}' y1='{_n(ax.Y(v))}' "
+                     f"x2='{ax.x0 + ax.w}' y2='{_n(ax.Y(v))}' stroke='{GRID}' "
+                     f"stroke-dasharray='3 3' stroke-width='0.7'/>")
+    s.append(f"<line x1='{_n(ax.X(-m))}' y1='{_n(ax.Y(-m))}' x2='{_n(ax.X(m))}' "
+             f"y2='{_n(ax.Y(m))}' stroke='{MUT}' stroke-dasharray='6 4' stroke-width='0.9'/>")
+    Xn, Yn = ax.X(X0[ns].values), ax.Y(Y0[ns].values)
+    s.append("<g data-g='ns'><path d='"
+             + "".join(f"M{x:.1f} {y:.1f}h0" for x, y in zip(Xn, Yn))
+             + f"' stroke='{FAINT}' stroke-width='3.2' stroke-linecap='round' fill='none'/></g>")
+    prog_of = _prog_of(prog)
+    pv = {c: (de[c + "_p.adj"] if run.use_padj and c + "_p.adj" in de.columns
+              else de.get(c + "_p.val")) for c in (cx, cy)}
+
+    def pt(pid, col, rad, key):
+        nm = str(run.labels.get(pid, pid))
+        tip = [nm + (f" ({pid})" if nm != pid else ""),
+               f"x {X0[pid]:+.2f}" + (f" · p {_p(pv[cx][pid])}" if pv[cx] is not None else ""),
+               f"y {Y0[pid]:+.2f}" + (f" · p {_p(pv[cy][pid])}" if pv[cy] is not None else "")]
+        if pid in prog_of:
+            tip.append(f"programme P{int(prog_of[pid])}")
+        return (f"<circle class='pt' cx='{_n(ax.X(X0[pid]))}' cy='{_n(ax.Y(Y0[pid]))}' "
+                f"r='{rad}' fill='{col}' stroke='{BG}' stroke-width='0.6'>"
+                f"<title>{_esc(chr(10).join(tip))}</title></circle>")
+
+    same = both & (X0 * Y0 > 0)
+    opp = both & (X0 * Y0 < 0)
+    layers = [("x", only_x, BLUE, 2.8, f"DEP in x only ({int(only_x.sum())})"),
+              ("y", only_y, AMBER, 2.8, f"DEP in y only ({int(only_y.sum())})"),
+              ("opp", opp, PURP, 3.6, f"opposite sign ({int(opp.sum())})"),
+              ("same", same, GREEN, 3.6, f"same sign ({int(same.sum())})")]
+    legend = [(FAINT, f"not significant ({int(ns.sum())})", "ns")]
+    for key, mask, col, rad, text in layers:
+        s.append(f"<g data-g='{key}'>"
+                 + "".join(pt(i, col, rad, key) for i in de.index[mask]) + "</g>")
+        legend.append((col, text, key))
+    if sl is not None:
+        mx, my = float(X0[both].mean()), float(Y0[both].mean())
+        pts = []
+        # drawn over the span of the shared DEP only: outside it the fit is an extrapolation
+        for xe in (float(X0[both].min()), float(X0[both].max())):
+            ye = my + sl * (xe - mx)
+            if abs(ye) > m:
+                ye = m if ye > 0 else -m
+                xe = mx + (ye - my) / sl
+            pts.append((xe, ye))
+        s.append(f"<line x1='{_n(ax.X(pts[0][0]))}' y1='{_n(ax.Y(pts[0][1]))}' "
+                 f"x2='{_n(ax.X(pts[1][0]))}' y2='{_n(ax.Y(pts[1][1]))}' stroke='{WHITE}' "
+                 f"stroke-width='1.6'><title>major-axis fit on the "
+                 f"{int(both.sum())} shared DEP: slope {sl:+.2f}</title></line>")
+    quad = [(ax.x0 + ax.w - 6, ax.y0 + 15, "end",
+             f"↑↑ {int((both & (X0 > 0) & (Y0 > 0)).sum())}", GREEN),
+            (ax.x0 + 6, ax.y0 + ax.h - 8, "start",
+             f"↓↓ {int((both & (X0 < 0) & (Y0 < 0)).sum())}", GREEN),
+            (ax.x0 + 6, ax.y0 + 15, "start",
+             f"↓↑ {int((both & (X0 < 0) & (Y0 > 0)).sum())}", PURP),
+            (ax.x0 + ax.w - 6, ax.y0 + ax.h - 8, "end",
+             f"↑↓ {int((both & (X0 > 0) & (Y0 < 0)).sum())}", PURP)]
+    for lx, ly, ta, txt, col in quad:
+        s.append(f"<text x='{_n(lx)}' y='{_n(ly)}' fill='{col}' font-size='11' "
+                 f"font-weight='bold' text-anchor='{ta}' pointer-events='none' "
+                 f"paint-order='stroke' stroke='{BG}' stroke-width='3' "
+                 f"stroke-linejoin='round'>{txt}</text>")
+    named = pd.Series([informative(run.labels.get(i, "")) for i in de.index], index=de.index)
+    score = (X0.abs() + Y0.abs()).where(both & named, 0)
+    cand = list(score.sort_values(ascending=False).index[:10])
+    cand = [i for i in cand if score[i] > 0]
+    placer = Placer((ax.x0 + 2, ax.y0 + 2, ax.x0 + ax.w - 2, ax.y0 + ax.h - 2), fs=10)
+    for lx, ly, ta, txt, _c in quad:                 # the counts own their corner
+        w = _tw(txt, 11) + 6
+        placer.block((lx - w if ta == "end" else lx - 3, ly - 13,
+                      lx + 3 if ta == "end" else lx + w, ly + 5))
+    for i in cand:
+        placer.block((float(ax.X(X0[i])) - 4, float(ax.Y(Y0[i])) - 4,
+                      float(ax.X(X0[i])) + 4, float(ax.Y(Y0[i])) + 4))
+    for i in cand:
+        x, y = float(ax.X(X0[i])), float(ax.Y(Y0[i]))
+        text = _short(run.labels.get(i, i), 16)
+        pos = placer.place(x, y, text)
+        if pos:
+            s.append(_label(x, y, pos, text, color=GREEN if bool(same[i]) else PURP))
+    lx, ly = 74, ax.y0 + ax.h + 54
+    for col, text, key in legend:
+        w = 30 + _tw(text, 10.5)
+        if lx + w > W - 10:
+            lx, ly = 70, ly + 18
+        s.append(_legend_item(lx, ly, col, text, toggle=key))
+        lx += w + 6
+    s.append("</svg>")
+    return "".join(s)
+
+
+def fig_fc_vs_fc(run, P, prog=None, n_scatter=3):
+    """The pair matrix (3 contrasts or more) then the pairs that share the most DEP."""
+    if P is None or P.empty:
+        return None
+    out = []
+    mat = fig_fc_matrix(run, P)
+    if mat:
+        out.append(mat)
+    Q = P[P.shared >= 5].sort_values(["shared", "jaccard"], ascending=False)
+    if Q.empty:                                   # nothing shared: show the widest pair anyway
+        Q = P.sort_values(["dep_x", "dep_y"], ascending=False).head(1)
+    picks = list(Q.itertuples())[:max(1, n_scatter)]
+    for i, r in enumerate(picks):
+        out.append(fig_fc_scatter(run, r, prog, idx=i + 1))
+    return out, {"n_pairs": int(len(P)), "picked": [(r.contrast_x, r.contrast_y) for r in picks],
+                 "best": picks[0] if picks else None}
+
+
+# --------------------------------------------------------------------------- 5c. dynamic range, programme x group network
+
+def fig_dynamic_range(run, prog=None, n_names=6):
+    """Abundances ranked from the most to the least abundant protein, with the DEP marked.
+    Answers whether the differential proteins are simply the abundant ones."""
+    if run.means is None or run.means.empty:
+        A = run.abundance
+    else:
+        A = run.means
+    if A is None or A.empty:
+        return None
+    v = A.mean(axis=1).dropna().sort_values(ascending=False)
+    if len(v) < 20:
+        return None
+    sig = pd.Series(False, index=run.de.index)
+    for c in run.contrasts:
+        sig = sig | run.sig(c).fillna(False)
+    sig = sig.reindex(v.index).fillna(False)
+    W, H = 760, 520
+    ax = Ax(66, 92, 600, 300, (0, len(v)), (float(v.min()), float(v.max())))
+    rng = float(v.max() - v.min())
+    frac = float(sig.mean())
+    s = [svg_open(W, H, "Dynamic range"),
+         title_block(14, 20, "Dynamic range, with the differential proteins marked",
+                     f"{len(v)} proteins ranked by mean log2 abundance · "
+                     f"{rng:.1f} log2 = {rng / 3.3219:.1f} orders of magnitude · "
+                     f"{int(sig.sum())} DEP ({frac * 100:.0f} %) · hover the deciles below"),
+         ax.frame("rank, most abundant first", "mean log2 abundance")]
+    X, Y = ax.X(np.arange(len(v))), ax.Y(v.values)
+    s.append("<path d='M" + " L".join(f"{x:.1f} {y:.1f}" for x, y in zip(X, Y))
+             + f"' fill='none' stroke='{MUT}' stroke-width='1.4'/>")
+    xs, ys = X[sig.values], Y[sig.values]
+    s.append("<g data-g='dep'><path d='"
+             + "".join(f"M{x:.1f} {y:.1f}h0" for x, y in zip(xs, ys))
+             + f"' stroke='{UP}' stroke-width='3.4' stroke-linecap='round' fill='none'/></g>")
+    # decile strip: share of DEP in each tenth of the ranking
+    bins = np.array_split(np.arange(len(v)), 10)
+    sh = [float(sig.values[b].mean()) if len(b) else 0.0 for b in bins]
+    smax = max(sh) or 1.0
+    sy, shh = ax.y0 + ax.h + 48, 34
+    s.append(f"<text x='{_n(ax.x0)}' y='{_n(sy - 6)}' fill='{FG}' font-size='10'>"
+             + _esc("share of DEP per decile of abundance") + "</text>")
+    for i, (b, f_) in enumerate(zip(bins, sh)):
+        x = ax.X(b[0])
+        w = max(ax.X(b[-1] + 1) - x - 2, 2)
+        h = shh * f_ / smax
+        tip = (f"decile {i + 1} (most abundant first): {f_ * 100:.0f} % of its "
+               f"{len(b)} proteins are DEP")
+        s.append(f"<rect class='pt' x='{_n(x)}' y='{_n(sy + shh - h)}' width='{_n(w)}' "
+                 f"height='{_n(h)}' fill='{UP}' fill-opacity='0.75'>"
+                 f"<title>{_esc(tip)}</title></rect>")
+    s.append(f"<line x1='{_n(ax.x0)}' y1='{_n(sy + shh)}' x2='{_n(ax.x0 + ax.w)}' "
+             f"y2='{_n(sy + shh)}' stroke='{MUT}' stroke-width='0.8'/>"
+             f"<line x1='{_n(ax.x0)}' y1='{_n(sy + shh - shh * frac / smax)}' "
+             f"x2='{_n(ax.x0 + ax.w)}' y2='{_n(sy + shh - shh * frac / smax)}' stroke='{WHITE}' "
+             f"stroke-dasharray='4 3' stroke-width='0.9'><title>"
+             f"{_esc(f'overall share: {frac * 100:.0f} %')}</title></line>"
+             f"<text x='{_n(ax.x0 + ax.w + 6)}' y='{_n(sy + shh - shh * frac / smax + 3)}' "
+             f"fill='{MUT}' font-size='9'>all</text>")
+    # the most abundant proteins, named
+    from .labels import informative
+    top = [i for i in v.index[:60] if informative(run.labels.get(i, ""))][:n_names]
+    placer = Placer((ax.x0 + 2, ax.y0 + 2, ax.x0 + ax.w - 2, ax.y0 + ax.h - 2), fs=10)
+    for pid in top:
+        k = int(v.index.get_loc(pid))
+        placer.block((float(X[k]) - 3, float(Y[k]) - 3, float(X[k]) + 3, float(Y[k]) + 3))
+    for pid in top:
+        k = int(v.index.get_loc(pid))
+        x, y = float(X[k]), float(Y[k])
+        s.append(f"<circle cx='{_n(x)}' cy='{_n(y)}' r='3' fill='{BLUE}' stroke='{BG}' "
+                 f"stroke-width='0.6'><title>{_esc(str(run.labels.get(pid, pid)))}: "
+                 f"{v[pid]:.1f} log2, rank {k + 1}</title></circle>")
+        pos = placer.place(x, y, _short(str(run.labels.get(pid, pid)), 16))
+        if pos:
+            s.append(_label(x, y, pos, _short(str(run.labels.get(pid, pid)), 16), color=BLUE))
+    s.append(_legend_item(ax.x0, H - 14, UP, f"differential in at least one contrast "
+                                             f"({int(sig.sum())})", toggle="dep"))
+    s.append("</svg>")
+    top_d, bot_d = sh[0], sh[-1]
+    return "".join(s), {"range_log2": rng, "orders": rng / 3.3219, "n": int(len(v)),
+                        "frac": frac, "top_decile": top_d, "bottom_decile": bot_d}
+
+
+def fig_programme_groups(run, prog, groups, q_thr=0.05, max_groups=14):
+    """Which functional group goes with which response programme. Bipartite, so a group
+    attached to several programmes is a group the clustering does not separate."""
+    from .programmes import theme_overlaps
+    if prog is None or groups is None:
+        return None
+    O = theme_overlaps(prog.labels, groups)
+    if O is None or O.empty:
+        return None
+    keep = (O[O.q < q_thr].theme.value_counts().index.tolist()
+            or O.sort_values("p").theme.drop_duplicates().tolist())
+    keep = [t for t in groups.top(max_groups, min_terms=1) if t in set(keep)][:max_groups]
+    if not keep:
+        return None
+    O = O[O.theme.isin(keep)]
+    ks = sorted(prog.labels.unique())
+    rowh = 30
+    top, lh = 96, max(len(ks), len(keep)) * rowh
+    lab = min(300, max(120, max(_tw(_short(groups.names[t], 40), 10) for t in keep) + 12))
+    xL, xR = 150, 150 + 240
+    yL = {p: top + (i + 0.5) * lh / len(ks) for i, p in enumerate(ks)}
+    yR = {t: top + (i + 0.5) * lh / len(keep) for i, t in enumerate(keep)}
+    cols_p = {p: CAT[(int(p) - 1) % len(CAT)] for p in ks}
+    nsig = int((O.q < q_thr).sum())
+    sub = (f"{len(ks)} programmes · {len(keep)} groups · line = proteins in common "
+           f"(width = how many) · solid = more than expected (q < {q_thr:g}, "
+           f"{nsig} links) · hover a line")
+    W = max(xR + lab + 30, int(_tw(sub, 11)) + 40)
+    H = top + lh + 60
+    s = [svg_open(W, H, "Programmes and functional groups"),
+         title_block(14, 20, "Programmes and functional groups", sub),
+         f"<text x='{_n(xL)}' y='{_n(top - 16)}' fill='{MUT}' font-size='10' "
+         f"text-anchor='middle'>programme</text>"
+         f"<text x='{_n(xR)}' y='{_n(top - 16)}' fill='{MUT}' font-size='10'>functional "
+         f"group</text>"]
+    for r in O.sort_values("shared").itertuples():
+        p, t = int(r.programme), int(r.theme)
+        if t not in yR:
+            continue
+        y1, y2 = yL[p], yR[t]
+        sigf = r.q < q_thr
+        mid = (xL + xR) / 2
+        d = f"M{_n(xL + 10)} {_n(y1)}C{_n(mid)} {_n(y1)} {_n(mid)} {_n(y2)} {_n(xR - 10)} {_n(y2)}"
+        tip = (f"P{p} ∩ {groups.names[t]}: {r.shared} proteins "
+               f"(expected {r.expected:.1f})\nq {_p(r.q)} · programme {r.n_programme} "
+               f"proteins · group {r.n_group}")
+        s.append(f"<path class='pt' d='{d}' fill='none' stroke='{cols_p[p] if sigf else MUT}' "
+                 f"stroke-width='{min(1 + r.shared / 4, 7):.1f}' "
+                 f"stroke-opacity='{0.75 if sigf else 0.3}'"
+                 + ("" if sigf else " stroke-dasharray='4 3'")
+                 + f"><title>{_esc(tip)}</title></path>")
+    for p in ks:
+        n = int((prog.labels == p).sum())
+        s.append(f"<circle cx='{_n(xL)}' cy='{_n(yL[p])}' r='{min(6 + n / 40, 14):.1f}' "
+                 f"fill='{cols_p[p]}' stroke='{BG}' stroke-width='1'><title>"
+                 f"{_esc(f'programme P{int(p)}: {n} proteins')}</title></circle>"
+                 f"<text x='{_n(xL - 20)}' y='{_n(yL[p] + 3.5)}' fill='{FG}' font-size='10.5' "
+                 f"text-anchor='end'>P{int(p)} ({n})</text>")
+    for t in keep:
+        n = len(groups.genes(t))
+        s.append(f"<circle cx='{_n(xR)}' cy='{_n(yR[t])}' r='{min(5 + n / 40, 12):.1f}' "
+                 f"fill='{PANEL}' stroke='{MUT}' stroke-width='1.2'><title>"
+                 f"{_esc(f'G{t + 1}: {groups.names[t]} — {n} proteins')}</title></circle>"
+                 f"<text x='{_n(xR + 16)}' y='{_n(yR[t] + 3.5)}' fill='{FG}' font-size='10'>"
+                 f"{_esc(_short(groups.names[t], 40))}<title>{_esc(groups.names[t])}</title>"
+                 f"</text>")
+    s.append(f"<text x='14' y='{_n(H - 12)}' fill='{MUT}' font-size='9'>"
+             + _esc("A group tied to several programmes is one the clustering does not "
+                    "split: its proteins answer to more than one pattern.") + "</text>")
+    s.append("</svg>")
+    best = O.sort_values("q").iloc[0]
+    return "".join(s), {"n_links": int(len(O)), "n_sig": nsig,
+                        "best": (int(best.programme), str(best.group), int(best.shared),
+                                 float(best.q)),
+                        "table": O}
+
+
+def fig_radar(run, prog, design, F=None, max_cond=8):
+    """One spoke per condition, one polygon per programme: the shape of each programme over
+    the whole design at a glance. Only worth drawing with a handful of conditions."""
+    if prog is None or prog.z is None or prog.z.empty:
+        return None
+    conds = [c for c in (design.conditions or run.conditions) if c in prog.z.columns]
+    if F is not None:
+        from .factorial import condition_order, roles
+        try:
+            conds = [c for c in condition_order(F, roles(F)) if c in conds] or conds
+        except Exception:
+            pass
+    if not 3 <= len(conds) <= max_cond:
+        return None
+    M = pd.DataFrame({c: prog.z[c].groupby(prog.labels.reindex(prog.z.index)).median()
+                      for c in conds})
+    if M.empty or M.isna().all().all():
+        return None
+    lo, hi = float(np.nanmin(M.values)), float(np.nanmax(M.values))
+    if hi - lo < 1e-9:
+        return None
+    pad = (hi - lo) * 0.08
+    lo, hi = lo - pad, hi + pad
+    R, cx, cy = 150, 300, 258
+    W, H = 600, 500
+    cols_p = {p: CAT[(int(p) - 1) % len(CAT)] for p in M.index}
+    ang = {c: -np.pi / 2 + 2 * np.pi * i / len(conds) for i, c in enumerate(conds)}
+    rad = lambda v: R * (float(v) - lo) / (hi - lo)
+    xy = lambda c, v: (cx + rad(v) * np.cos(ang[c]), cy + rad(v) * np.sin(ang[c]))
+    s = [svg_open(W, H, "Programme shapes"),
+         title_block(14, 20, "Shape of each programme over the design",
+                     f"{len(conds)} conditions · radius = median z of the programme · the "
+                     "pale ring is z = 0 · hover a polygon")]
+    for frac in (0.25, 0.5, 0.75, 1.0):
+        s.append(f"<circle cx='{cx}' cy='{cy}' r='{_n(R * frac)}' fill='none' stroke='{GRID}' "
+                 f"stroke-width='0.5'/>")
+    if lo < 0 < hi:
+        s.append(f"<circle cx='{cx}' cy='{cy}' r='{_n(rad(0))}' fill='none' stroke='{MUT}' "
+                 f"stroke-dasharray='4 3' stroke-width='1'><title>z = 0</title></circle>")
+    for c in conds:
+        x, y = cx + R * np.cos(ang[c]), cy + R * np.sin(ang[c])
+        s.append(f"<line x1='{cx}' y1='{cy}' x2='{_n(x)}' y2='{_n(y)}' stroke='{GRID}' "
+                 f"stroke-width='0.5'/>")
+        lx, ly = cx + (R + 14) * np.cos(ang[c]), cy + (R + 14) * np.sin(ang[c])
+        anc = "middle" if abs(np.cos(ang[c])) < 0.3 else ("start" if np.cos(ang[c]) > 0 else "end")
+        s.append(f"<text x='{_n(lx)}' y='{_n(ly + 3.2)}' fill='{FG}' font-size='9.5' "
+                 f"text-anchor='{anc}'>{_esc(_short(str(c), 16))}<title>{_esc(str(c))}</title>"
+                 f"</text>")
+    for p in M.index:
+        pts = [xy(c, M.at[p, c]) for c in conds if pd.notna(M.at[p, c])]
+        if len(pts) < 3:
+            continue
+        col = cols_p[int(p)]
+        d = "M" + " L".join(f"{_n(x)} {_n(y)}" for x, y in pts) + " Z"
+        hi_c = M.loc[p].idxmax()
+        lo_c = M.loc[p].idxmin()
+        tip = (f"programme P{int(p)} · {int((prog.labels == p).sum())} proteins\n"
+               f"highest in {hi_c} ({M.at[p, hi_c]:+.2f}), lowest in {lo_c} "
+               f"({M.at[p, lo_c]:+.2f})")
+        if prog.names.get(int(p)):
+            tip += "\n" + ", ".join(str(x) for x in prog.names[int(p)][:3])
+        s.append(f"<g data-g='P{int(p)}'><path class='pt' d='{d}' fill='{col}' "
+                 f"fill-opacity='0.12' stroke='{col}' stroke-width='2' "
+                 f"stroke-linejoin='round'><title>{_esc(tip)}</title></path>"
+                 + "".join(f"<circle cx='{_n(x)}' cy='{_n(y)}' r='2.8' fill='{col}'/>"
+                           for x, y in pts) + "</g>")
+    lx, ly = 14, H - 42
+    for p in M.index:
+        t = f"P{int(p)} ({int((prog.labels == p).sum())})"
+        w = 30 + _tw(t, 10.5)
+        if lx + w > W - 10:
+            lx, ly = 14, ly + 17
+        s.append(_legend_item(lx, ly, cols_p[int(p)], t, toggle=f"P{int(p)}"))
+        lx += w + 6
+    s.append(f"<text x='14' y='{_n(H - 10)}' fill='{MUT}' font-size='9'>"
+             + _esc("Radii are z-scores on one common scale, so the polygons compare "
+                    "directly; the order of the spokes follows the design.") + "</text>")
+    s.append("</svg>")
+    return "".join(s), {"n_cond": len(conds), "k": int(len(M))}
 
 
 # --------------------------------------------------------------------------- 6. spotlight
@@ -1219,6 +1940,129 @@ def fig_factors(summary, terms, F, src):
     return ["".join(s)], {}
 
 
+# --------------------------------------------------------------------------- 7b. variance violins
+
+def _kde01(v, grid, bw=None):
+    """Gaussian density of shares bounded to [0, 1], with reflection at both ends so that
+    the mass piled at 0 or 1 is not smoothed out of the range."""
+    v = np.asarray(v, float)
+    v = v[np.isfinite(v)]
+    if len(v) < 2:
+        return np.zeros_like(grid)
+    if bw is None:
+        q1, q3 = np.percentile(v, [25, 75])
+        sd = min(v.std(ddof=1), (q3 - q1) / 1.349) or v.std(ddof=1)
+        bw = max(0.9 * sd * len(v) ** -0.2, 0.012)
+    if len(v) > 4000:                                 # enough for the shape, bounded cost
+        v = np.random.default_rng(0).choice(v, 4000, replace=False)
+    d = np.zeros_like(grid)
+    for r in (v, -v, 2 - v):
+        d += np.exp(-0.5 * ((grid[:, None] - r[None, :]) / bw) ** 2).sum(axis=1)
+    return d / (len(v) * bw * np.sqrt(2 * np.pi))
+
+
+def variance_quantiles(S, S_ref, terms):
+    """Long table set x term: n, q1, median, q3 of the per-protein variance shares."""
+    parts = [t for t in list(terms) + ["higher-order", "replicates"] if t in S.columns]
+    rows = []
+    for name, D in (("selected", S), ("all quantified", S_ref)):
+        if D is None or D.empty:
+            continue
+        for t in parts:
+            v = D[t].dropna().to_numpy(float)
+            q1, md, q3 = np.percentile(v, [25, 50, 75]) if len(v) else (np.nan,) * 3
+            rows.append(dict(set=name, term=t, n_proteins=len(v), q1=round(float(q1), 3),
+                             median=round(float(md), 3), q3=round(float(q3), 3)))
+    return pd.DataFrame(rows)
+
+
+def fig_variance_violins(S, S_ref, terms, src=""):
+    """Split violins of the per-protein variance shares: one pair per design term, left
+    half = all quantified proteins (background), right half = selected proteins. The
+    selected proteins were picked on differences between conditions, so their shares are
+    read against the background, not in absolute terms."""
+    if S is None or S.empty:
+        return None
+    parts = [t for t in list(terms) + ["higher-order", "replicates"] if t in S.columns]
+    has_ref = S_ref is not None and not S_ref.empty
+    cols = {t: CAT[i % len(CAT)] for i, t in enumerate(terms)}
+    cols["higher-order"] = "#6e7681"
+    cols["replicates"] = MUT
+    REF = FAINT
+    cw = 96 if len(parts) <= 8 else 78
+    left, top, ph = 62, 78, 300
+    sub = ("Type-II share of each protein's variance per design term"
+           + (f" (factors from {src})" if src else "")
+           + " · each half scaled to its own maximum · bar = quartiles, tick = median")
+    W = max(left + cw * len(parts) + 24, 560, int(_tw(sub, 11)) + 40)
+    H = top + ph + 74
+    ax = Ax(left, top, cw * len(parts), ph, (0, len(parts)), (0, 1.0))
+    grid = np.linspace(0, 1, 121)
+    q = variance_quantiles(S, S_ref if has_ref else None, terms).set_index(["set", "term"])
+    s = [svg_open(W, H, "Variance shares per protein"),
+         title_block(14, 20,
+                     "Variance shares per protein: selected proteins against the background",
+                     sub)]
+    lx = 14
+    if has_ref:
+        t_ = f"all quantified proteins ({len(S_ref)})"
+        s.append(_legend_item(lx, 62, REF, t_, toggle="ref", shape="rect"))
+        lx += 30 + _tw(t_, 10.5)
+    s.append(_legend_item(lx, 62, cols[parts[0]] if parts else FG,
+                          f"selected proteins ({len(S)}), one colour per term", toggle="sel",
+                          shape="rect"))
+    s.append(ax.frame("", "share of the protein's variance", xticks=[],
+                      yticks=[0, .25, .5, .75, 1], yfmt=lambda t: f"{t * 100:.0f} %"))
+    hw = cw / 2 - 7
+    facts = {}
+
+    def half(v, side, fill, key, name, t):
+        d = _kde01(v, grid)
+        if d.max() <= 0:
+            return ""
+        w = d / d.max() * hw
+        ys = ax.Y(grid)
+        pts = [f"{_n(xc)},{_n(ys[0])}"] + [f"{_n(xc + side * w[i])},{_n(ys[i])}"
+                                           for i in range(len(grid))] + [f"{_n(xc)},{_n(ys[-1])}"]
+        r = q.loc[(name, t)]
+        tip = (f"{t} · {name} ({int(r['n_proteins'])} proteins): median {r['median'] * 100:.0f} %, "
+               f"quartiles {r['q1'] * 100:.0f}–{r['q3'] * 100:.0f} %")
+        xa = xc + side * 2.5
+        o = [f"<g data-g='{key}'><polygon class='pt' points='{' '.join(pts)}' fill='{fill}' "
+             f"fill-opacity='0.85'><title>{_esc(tip)}</title>"
+             f"</polygon>",
+             f"<line x1='{_n(xa)}' y1='{_n(ax.Y(r['q1']))}' x2='{_n(xa)}' y2='{_n(ax.Y(r['q3']))}' "
+             f"stroke='{WHITE}' stroke-width='2.2'/>",
+             f"<line x1='{_n(xc)}' y1='{_n(ax.Y(r['median']))}' x2='{_n(xc + side * 9)}' "
+             f"y2='{_n(ax.Y(r['median']))}' stroke='{WHITE}' stroke-width='1.6'/></g>"]
+        return "".join(o)
+
+    for i, t in enumerate(parts):
+        xc = float(ax.X(i + 0.5))
+        s.append(f"<line x1='{_n(xc)}' y1='{_n(top)}' x2='{_n(xc)}' y2='{_n(top + ph)}' "
+                 f"stroke='{GRID}' stroke-width='0.6'/>")
+        if has_ref:
+            s.append(half(S_ref[t].to_numpy(float), -1, REF, "ref", "all quantified", t))
+        s.append(half(S[t].to_numpy(float), 1, cols[t], "sel", "selected", t))
+        ms = float(q.loc[("selected", t), "median"])
+        mr = float(q.loc[("all quantified", t), "median"]) if has_ref else float("nan")
+        facts[t] = (ms, mr)
+        lines = [_short(x, int(cw / 5.6)) for x in t.split(" × ")]
+        for j, ln in enumerate(lines[:2]):
+            s.append(f"<text x='{_n(xc)}' y='{_n(top + ph + 15 + 12 * j)}' fill='{FG}' "
+                     f"font-size='10' text-anchor='middle'>{_esc(('× ' if j else '') + ln)}"
+                     f"<title>{_esc(t)}</title></text>")
+        lab = (f"{mr * 100:.0f} % | " if has_ref else "") + f"{ms * 100:.0f} %"
+        s.append(f"<text x='{_n(xc)}' y='{_n(top + ph + 44)}' fill='{MUT}' font-size='9.5' "
+                 f"text-anchor='middle'>{lab}</text>")
+    s.append(f"<text x='{_n(left)}' y='{_n(H - 8)}' fill='{MUT}' font-size='9.5'>"
+             + _esc("Under each pair: median share, "
+                    + ("background | selected proteins" if has_ref else "selected proteins"))
+             + "</text>")
+    s.append("</svg>")
+    return ["".join(s)], {"medians": facts, "n_ref": len(S_ref) if has_ref else 0}
+
+
 # --------------------------------------------------------------------------- 8. factor effects
 
 def _lv(f, v, always=False):
@@ -1340,6 +2184,224 @@ def fig_factor_effects(run, F, cf, blocks):
 
 
 # --------------------------------------------------------------------------- 9. programme profiles
+
+def _level_means(run, F, f, lv, ids=None):
+    """Mean log2 abundance per protein at each level of factor f, averaging the conditions
+    that share the level (so the other factors are marginalised out)."""
+    if run.means is None or run.means.empty:
+        return None
+    M = run.means if ids is None else run.means.reindex(ids)
+    out = {}
+    for v in lv:
+        conds = [c for c in F.index[F[f].astype(str) == v] if c in M.columns]
+        if conds:
+            out[v] = M[conds].mean(axis=1)
+    return pd.DataFrame(out) if len(out) >= 2 else None
+
+
+def _dodge(ys, gap, lo=None, hi=None):
+    """Label positions at least `gap` apart, as close as possible to `ys` (least squares).
+    Isotonic regression by pool-adjacent-violators on y - i*gap: a crowded block is spread
+    around its own centre instead of pushing every later label down."""
+    n = len(ys)
+    if n == 0:
+        return []
+    idx = sorted(range(n), key=lambda i: ys[i])
+    z = [ys[i] - k * gap for k, i in enumerate(idx)]
+    val, cnt = [], []                                # pooled blocks: mean and size
+    for v in z:
+        val.append(v); cnt.append(1)
+        while len(val) > 1 and val[-2] > val[-1]:
+            w = cnt[-2] + cnt[-1]
+            val[-2] = (val[-2] * cnt[-2] + val[-1] * cnt[-1]) / w
+            cnt[-2] = w
+            val.pop(); cnt.pop()
+    flat = [v for v, c in zip(val, cnt) for _ in range(c)]
+    pos = [flat[k] + k * gap for k in range(n)]
+    span = pos[-1] - pos[0]
+    if lo is not None and hi is not None and hi - lo >= span:
+        pos = [p + max(0.0, lo - pos[0]) - max(0.0, pos[-1] - hi) for p in pos]
+    out = [0.0] * n
+    for k, i in enumerate(idx):
+        out[i] = pos[k]
+    return out
+
+
+def fig_slope_graph(run, F, r, prog=None, n=18):
+    """The proteins that move most between the two end levels of the ordered factor, each
+    one line from end to end. Crossing lines = a reordering, parallel lines = a shift."""
+    from .factorial import MISSING, levels
+    from .labels import informative
+    if F is None or not r or run.means is None:
+        return None
+    f = r["x"]
+    lv = [v for v in levels(F, f) if v != MISSING]
+    if len(lv) < 2:
+        return None
+    a, b = lv[0], lv[-1]
+    L = _level_means(run, F, f, [a, b])
+    if L is None or L.shape[1] < 2:
+        return None
+    L = L.dropna()
+    if len(L) < 3:
+        return None
+    d = L[b] - L[a]
+    named = pd.Series([informative(run.labels.get(i, "")) for i in L.index], index=L.index)
+    keep = d[named].abs().sort_values(ascending=False).index[:n]
+    if len(keep) < 3:
+        keep = d.abs().sort_values(ascending=False).index[:n]
+    L = L.loc[keep]
+    names = {i: _short(str(run.labels.get(i, i)), 22) for i in L.index}
+    gut, span, fs = 36, 260, 10
+    lab = min(170, max(90, max(_tw(t, fs) for t in names.values()) + 8))
+    left = gut + lab + 14
+    top = 100
+    plot_h = max(240, 17 * len(L))
+    sub = (f"{len(L)} proteins moving most between the end levels of {html.escape(f)} · mean "
+           f"log2 abundance over the conditions sharing the level · hover a line")
+    W = max(left + span + 86, int(_tw(sub, 11)) + 40)
+    H = top + plot_h + 62
+    ylim = (float(L.values.min()), float(L.values.max()))
+    pad = (ylim[1] - ylim[0]) * 0.08 or 0.5
+    ax = Ax(left, top, span, plot_h, (0, 1), (ylim[0] - pad, ylim[1] + pad))
+    prog_of = _prog_of(prog)
+    s = [svg_open(W, H, "End-to-end change"),
+         title_block(14, 20, f"From {_short(str(a), 18)} to {_short(str(b), 18)}", sub)]
+    for t in nice_ticks(*ax.yl):
+        if not (ax.yl[0] <= t <= ax.yl[1]):
+            continue
+        y = float(ax.Y(t))
+        s.append(f"<line x1='{_n(left)}' y1='{_n(y)}' x2='{_n(left + span)}' y2='{_n(y)}' "
+                 f"stroke='{GRID}' stroke-width='0.5'/>"
+                 f"<text x='{_n(gut - 6)}' y='{_n(y + 3)}' fill='{MUT}' font-size='9' "
+                 f"text-anchor='end'>{_esc(_fmt_tick(t))}</text>")
+    s.append(f"<text x='{_n(gut - 6)}' y='{_n(top - 12)}' fill='{MUT}' font-size='9' "
+             f"text-anchor='end'>log2</text>")
+    for v, x, anc in ((a, left, "end"), (b, left + span, "start")):
+        s.append(f"<text x='{_n(x + (-6 if anc == 'end' else 6))}' y='{_n(top - 12)}' "
+                 f"fill='{FG}' font-size='11' text-anchor='{anc}'>{_esc(f'{f} = {v}')}</text>"
+                 f"<line x1='{_n(x)}' y1='{_n(top)}' x2='{_n(x)}' y2='{_n(top + plot_h)}' "
+                 f"stroke='{MUT}' stroke-width='0.8'/>")
+    ids = list(L.index)
+    yl = _dodge([float(ax.Y(L.at[i, a])) for i in ids], fs + 2.5, top, top + plot_h)
+    yr = _dodge([float(ax.Y(L.at[i, b])) for i in ids], fs + 2.5, top, top + plot_h)
+    up_n = int((L[b] > L[a]).sum())
+    for k, pid in enumerate(ids):
+        y1, y2 = float(ax.Y(L.at[pid, a])), float(ax.Y(L.at[pid, b]))
+        col = UP if L.at[pid, b] > L.at[pid, a] else DOWN
+        tip = [str(run.labels.get(pid, pid)), f"{f} {a}: {L.at[pid, a]:.2f} log2",
+               f"{f} {b}: {L.at[pid, b]:.2f} log2", f"change {L.at[pid, b] - L.at[pid, a]:+.2f}"]
+        if pid in prog_of:
+            tip.append(f"programme P{int(prog_of[pid])}")
+        g = "up" if col == UP else "down"
+        o = [f"<g data-g='{g}'><line class='pt' x1='{_n(left)}' y1='{_n(y1)}' "
+             f"x2='{_n(left + span)}' y2='{_n(y2)}' stroke='{col}' stroke-width='1.5' "
+             f"stroke-opacity='0.85'><title>{_esc(chr(10).join(tip))}</title></line>",
+             f"<circle cx='{_n(left)}' cy='{_n(y1)}' r='2.6' fill='{col}'/>"
+             f"<circle cx='{_n(left + span)}' cy='{_n(y2)}' r='2.6' fill='{col}'/>"]
+        for xa, xb, ya, yb_ in ((left - 4, left - 9, y1, yl[k]),
+                                (left + span + 4, left + span + 9, y2, yr[k])):
+            if abs(ya - yb_) > 1.5:                  # leader line to the moved label
+                o.append(f"<path d='M{_n(xa)} {_n(ya)}L{_n(xb)} {_n(yb_)}' fill='none' "
+                         f"stroke='{MUT}' stroke-width='0.7' stroke-opacity='0.8'/>")
+        o.append(f"<text x='{_n(left - 11)}' y='{_n(yl[k] + 3.2)}' fill='{FG}' "
+                 f"font-size='{fs}' text-anchor='end'>{_esc(names[pid])}"
+                 f"<title>{_esc(chr(10).join(tip))}</title></text>"
+                 f"<text x='{_n(left + span + 11)}' y='{_n(yr[k] + 3.2)}' fill='{MUT}' "
+                 f"font-size='{fs}'>{L.at[pid, b] - L.at[pid, a]:+.2f}</text></g>")
+        s.append("".join(o))
+    lx = 14
+    for col, text, key in ((UP, f"higher at {b} ({up_n})", "up"),
+                           (DOWN, f"lower at {b} ({len(L) - up_n})", "down")):
+        s.append(_legend_item(lx, H - 30, col, text, toggle=key))
+        lx += 30 + _tw(text, 10.5) + 10
+    s.append(f"<text x='14' y='{_n(H - 10)}' fill='{MUT}' font-size='9'>"
+             + _esc("Right-hand number = change in log2. Abundances, not a test: read the "
+                    "volcanos for significance.") + "</text>")
+    s.append("</svg>")
+    return "".join(s), {"from": str(a), "to": str(b), "factor": f, "n": int(len(L)),
+                        "up": up_n}
+
+
+def fig_bump_chart(run, prog, F, r):
+    """Rank of each programme along the ordered factor, one panel per level of the lines
+    factor. Lines that cross = the programmes change order, not just amplitude."""
+    from .factorial import MISSING, levels
+    if prog is None or F is None or not r:
+        return None
+    f = r["x"]
+    lv = [v for v in levels(F, f) if v != MISSING]
+    if len(lv) < 3 or prog.k < 3:
+        return None
+    lines_f = r.get("lines")
+    panels = [v for v in levels(F, lines_f) if v != MISSING] if lines_f else [None]
+    panels = panels[:4]
+    Z = prog.z
+    data = {}
+    for pv in panels:
+        cols = {}
+        for v in lv:
+            m = (F[f].astype(str) == v)
+            if pv is not None:
+                m &= (F[lines_f].astype(str) == pv)
+            cs = [c for c in F.index[m] if c in Z.columns]
+            if cs:
+                cols[v] = Z[cs].mean(axis=1)
+        if len(cols) < 3:
+            continue
+        M = pd.DataFrame(cols)
+        P = pd.DataFrame({v: M[v].groupby(prog.labels.reindex(M.index)).median() for v in M})
+        data[pv] = P.rank(axis=0, ascending=False, method="first")
+    if not data:
+        return None
+    pw, ph = 190, 26 * prog.k
+    left, top = 54, 96
+    W = left + (pw + 46) * len(data) + 20
+    H = top + ph + 74
+    cols_p = {p: CAT[(p - 1) % len(CAT)] for p in range(1, prog.k + 1)}
+    s = [svg_open(W, H, "Programme ranks"),
+         title_block(14, 20, f"Order of the programmes along {html.escape(f)}",
+                     f"rank by median z at each level of {html.escape(f)} (1 = highest)"
+                     + (f" · one panel per {html.escape(str(lines_f))}" if panels[0] is not None
+                        else "") + " · crossing lines = the programmes swap order")]
+    for pi, (pv, R) in enumerate(data.items()):
+        x0 = left + pi * (pw + 46)
+        if pv is not None:
+            s.append(f"<text x='{_n(x0 + pw / 2)}' y='{_n(top - 18)}' fill='{FG}' "
+                     f"font-size='10.5' text-anchor='middle'>{_esc(str(pv))}</text>")
+        xs = {v: x0 + (pw * i / max(len(R.columns) - 1, 1)) for i, v in enumerate(R.columns)}
+        ys = {k: top + (k - 0.5) * ph / prog.k for k in range(1, prog.k + 1)}
+        for v, x in xs.items():
+            s.append(f"<text x='{_n(x)}' y='{_n(top + ph + 16)}' fill='{MUT}' font-size='9.5' "
+                     f"text-anchor='middle'>{_esc(_short(str(v), 10))}</text>")
+        if pi == 0:
+            for k in ys:
+                s.append(f"<text x='{_n(x0 - 12)}' y='{_n(ys[k] + 3.2)}' fill='{MUT}' "
+                         f"font-size='9.5' text-anchor='end'>{k}</text>")
+        for p in R.index:
+            pts = [(xs[v], ys[int(R.at[p, v])]) for v in R.columns]
+            d = "M" + " L".join(f"{_n(x)} {_n(y)}" for x, y in pts)
+            col = cols_p[int(p)]
+            tip = (f"programme P{int(p)}: rank "
+                   + " → ".join(f"{v} {int(R.at[p, v])}" for v in R.columns)
+                   + (f"\n{prog.names.get(int(p), [''])[0]}" if prog.names.get(int(p)) else ""))
+            s.append(f"<g data-g='P{int(p)}'><path class='pt' d='{d}' fill='none' stroke='{col}' "
+                     f"stroke-width='2.2' stroke-linejoin='round' stroke-linecap='round'>"
+                     f"<title>{_esc(tip)}</title></path>"
+                     + "".join(f"<circle cx='{_n(x)}' cy='{_n(y)}' r='3.6' fill='{col}' "
+                               f"stroke='{BG}' stroke-width='0.8'/>" for x, y in pts) + "</g>")
+    lx, ly = 14, H - 30
+    for p in range(1, prog.k + 1):
+        t = f"P{p}"
+        s.append(_legend_item(lx, ly, cols_p[p], t, toggle=f"P{p}"))
+        lx += 30 + _tw(t, 10.5)
+    s.append(f"<text x='14' y='{_n(H - 10)}' fill='{MUT}' font-size='9'>"
+             + _esc("Rank only: a programme can keep rank 1 while its amplitude falls. "
+                    "Read it with the programme profiles above.") + "</text>")
+    s.append("</svg>")
+    return "".join(s), {"factor": f, "panels": [str(p) for p in data if p is not None],
+                        "levels": [str(v) for v in lv]}
+
 
 def fig_factor_profiles(run, prog, F, r, cf=None):
     """Interaction plots: one row per programme, one column per facet level (light),
