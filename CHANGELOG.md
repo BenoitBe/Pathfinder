@@ -58,6 +58,10 @@
   scale with the z = 0 ring drawn. Only for a design with 3 to 8 conditions; beyond that
   the programme profiles read better and the figure is skipped.
 
+### Changed
+- **Day theme by default** when the report opens (`data-theme='light'`). The reader's
+  own choice still wins: `localStorage` is read before the default applies.
+
 ### Fixed
 - **The whole *Biological reading* tab vanished on Python 3.11** (`SyntaxError:
   unterminated string literal`, `reading/svg.py`): the dynamic-range figure used an

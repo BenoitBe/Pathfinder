@@ -188,8 +188,8 @@ class TestHtmlReport:
         assert "lang='en'" in html
 
     def test_day_night_button(self, html):
-        """Night by default; the button switches to day and the choice is remembered."""
-        assert "<html lang='en' data-theme='dark'>" in html
+        """Day by default; the button switches to night and the choice is remembered."""
+        assert "<html lang='en' data-theme='light'>" in html
         assert "id='themeBtn'" in html and "onclick='toggleTheme()'" in html
         assert "window.toggleTheme" in html and "localStorage.setItem('pathfinder-theme'" in html
         head = html.split("</head>")[0]
