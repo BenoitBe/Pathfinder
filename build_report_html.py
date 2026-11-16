@@ -1164,7 +1164,7 @@ def build(path, meta_go, explore, provenance: dict, kpis: dict, resume=None, bra
         f"<section id='sec-{i}' data-name='{_esc(t)}' class='panel' style='display:{'block' if i==0 else 'none'}'>{panels[t]}</section>"
         for i, t in enumerate(tabs))
 
-    doc = f"""<!doctype html><html lang='en' data-theme='dark'><head><meta charset='utf-8'>
+    doc = f"""<!doctype html><html lang='en' data-theme='light'><head><meta charset='utf-8'>
 <script>{THEME_HEAD_JS}</script>
 <meta name='viewport' content='width=device-width, initial-scale=1'>
 <title>Pathfinder — Exploration & Synthesis Report</title>
